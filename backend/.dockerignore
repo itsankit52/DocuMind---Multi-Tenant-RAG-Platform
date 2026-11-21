@@ -1,0 +1,15 @@
+node_modules
+npm-debug.log*
+.env
+.env.*
+!.env.example
+tests
+scratch
+coverage
+config
+sql
+e2e_*
+*.md
+Dockerfile
+.dockerignore
+docker-compose*.yml

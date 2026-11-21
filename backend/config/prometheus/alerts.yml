@@ -1,0 +1,112 @@
+# DocuMind alert rules (Step 13).
+# Evaluated by Prometheus; no Alertmanager / external notifications are configured.
+# Connect an Alertmanager later via `alerting:` in prometheus.yml to route these.
+groups:
+  - name: documind-availability
+    rules:
+      - alert: DocuMindTargetDown
+        expr: up{job=~"documind-.*"} == 0
+        for: 1m
+        labels: { severity: critical }
+        annotations:
+          summary: "{{ $labels.job }} is not reachable by Prometheus"
+          description: "The /metrics endpoint of {{ $labels.instance }} has failed scrapes for 1 minute."
+
+      - alert: DocuMindDependencyNotReady
+        expr: dependency_up == 0
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: "Dependency {{ $labels.dependency }} failed readiness checks"
+          description: "GET /health/ready reports {{ $labels.dependency }} down for 2 minutes."
+
+      - alert: DocuMindWorkerNotConsuming
+        expr: worker_consumer_active{job="documind-worker"} == 0
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: "Document worker is not consuming from RabbitMQ"
+
+  - name: documind-api
+    rules:
+      - alert: DocuMindHigh5xxRate
+        expr: |
+          sum(rate(http_requests_total{status_code=~"5.."}[5m]))
+            / sum(rate(http_requests_total[5m])) > 0.05
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: "More than 5% of API requests return 5xx"
+
+      - alert: DocuMindHighApiLatency
+        expr: |
+          histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{
+            route!~".*/messages/stream|/metrics|/health.*|/api/rag/.*|/api/conversations/:conversationId/messages"}[5m]))) > 2
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "API p95 latency above 2s (excluding LLM routes)"
+
+      - alert: DocuMindDatabaseErrors
+        expr: sum(rate(db_query_errors_total[5m])) > 0.5
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "PostgreSQL errors above 0.5/s"
+
+  - name: documind-rag
+    rules:
+      - alert: DocuMindHighRagLatency
+        expr: histogram_quantile(0.95, sum by (le, mode) (rate(rag_duration_seconds_bucket[10m]))) > 30
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "RAG p95 latency above 30s ({{ $labels.mode }})"
+
+      - alert: DocuMindHighOllamaErrorRate
+        expr: |
+          sum(rate(ollama_requests_total{status=~"error|timeout"}[5m]))
+            / sum(rate(ollama_requests_total[5m])) > 0.10
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: "More than 10% of Ollama generations fail or time out"
+
+      - alert: DocuMindHighQdrantErrorRate
+        expr: |
+          sum(rate(qdrant_requests_total{status="error"}[5m]))
+            / sum(rate(qdrant_requests_total[5m])) > 0.05
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: "More than 5% of Qdrant operations fail"
+
+      - alert: DocuMindSseStreamErrors
+        expr: |
+          sum(rate(sse_streams_total{outcome=~"error|timeout"}[10m]))
+            / sum(rate(sse_streams_total[10m])) > 0.20
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "More than 20% of chat streams end in an error or timeout"
+
+  - name: documind-processing
+    rules:
+      - alert: DocuMindProcessingFailureSpike
+        expr: sum(increase(document_processing_jobs_total{outcome="failed"}[15m])) > 5
+        labels: { severity: warning }
+        annotations:
+          summary: "More than 5 documents permanently failed processing in 15 minutes"
+
+      - alert: DocuMindDeadLetterQueueGrowing
+        expr: queue_depth{queue="dlq"} > 0 and delta(queue_depth{queue="dlq"}[15m]) > 0
+        labels: { severity: warning }
+        annotations:
+          summary: "Dead-letter queue is growing ({{ $value }} new messages in 15m)"
+
+      - alert: DocuMindProcessingBacklog
+        expr: queue_depth{queue="main"} > 50
+        for: 15m
+        labels: { severity: warning }
+        annotations:
+          summary: "More than 50 documents waiting in the processing queue for 15 minutes"

@@ -1,0 +1,3 @@
+[
+  { "targets": ["host.docker.internal:9464"], "labels": { "component": "worker" } }
+]
