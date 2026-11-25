@@ -5,9 +5,35 @@ const orgRepo = require('../repositories/org.repository');
 const userRepo = require('../repositories/user.repository');
 const auditRepo = require('../repositories/audit.repository');
 const { checkRole } = require('../middleware/rbac');
+const rateLimiter = require('../middleware/rate-limiter');
+const { UUID_RE } = require('../middleware/tenant');
 const AppError = require('../utils/AppError');
 
 const router = express.Router();
+
+// Mounted behind authMiddleware, so budgets are per user (not per IP behind a shared NAT).
+const orgRateLimiter = rateLimiter({
+  windowMs: 60 * 1000,
+  max: 120,
+  keyGenerator: (req) => `ratelimit:org:${req.user.id}`,
+});
+
+// Tighter budget for state-changing requests (organization creation, member/role changes).
+const orgWriteRateLimiter = rateLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: 60,
+  keyGenerator: (req) => `ratelimit:org-write:${req.user.id}`,
+});
+
+router.use(orgRateLimiter);
+
+// Reject malformed IDs before they reach PostgreSQL (a uuid cast error would surface as 500).
+router.param('organizationId', (req, res, next, organizationId) => {
+  if (!UUID_RE.test(organizationId)) {
+    return next(new AppError('Organization ID must be a valid UUID.', 400));
+  }
+  next();
+});
 
 const createOrgSchema = zod.object({
   name: zod.string().min(2, 'Organization name must be at least 2 characters'),
@@ -20,7 +46,7 @@ const addMemberSchema = zod.object({
 });
 
 // Create Organization
-router.post('/', async (req, res, next) => {
+router.post('/', orgWriteRateLimiter, async (req, res, next) => {
   try {
     const parseResult = createOrgSchema.safeParse(req.body);
     if (!parseResult.success) {
@@ -34,15 +60,8 @@ router.post('/', async (req, res, next) => {
       return next(new AppError('Organization with this slug already exists.', 400));
     }
 
+    // Creates the organization, the creator's admin membership and the ORG_CREATE audit entry atomically
     const org = await orgRepo.create({ name, slug, ownerId: req.user.id });
-
-    await auditRepo.log({
-      organizationId: org.id,
-      actorId: req.user.id,
-      action: 'ORG_CREATE',
-      resourceId: org.id,
-      metadata: { name, slug },
-    });
 
     res.status(201).json({ status: 'success', data: { org } });
   } catch (err) {
@@ -86,7 +105,12 @@ router.post('/:organizationId/select', async (req, res, next) => {
 // Middleware to verify that the user has admin role in the target organization
 async function requireOrgAdmin(req, res, next) {
   const { organizationId } = req.params;
-  const membership = await orgRepo.validateMembership(req.user.id, organizationId);
+  let membership;
+  try {
+    membership = await orgRepo.validateMembership(req.user.id, organizationId);
+  } catch (err) {
+    return next(AppError.from(err));
+  }
 
   if (!membership || membership.role !== 'admin') {
     return next(new AppError('Admin privileges required for this organization.', 403));
@@ -109,7 +133,7 @@ router.get('/:organizationId/members', requireOrgAdmin, async (req, res, next) =
 });
 
 // Add member to organization (Admin only)
-router.post('/:organizationId/members', requireOrgAdmin, async (req, res, next) => {
+router.post('/:organizationId/members', orgWriteRateLimiter, requireOrgAdmin, async (req, res, next) => {
   try {
     const { organizationId } = req.params;
     const parseResult = addMemberSchema.safeParse(req.body);
@@ -124,17 +148,15 @@ router.post('/:organizationId/members', requireOrgAdmin, async (req, res, next) 
       return next(new AppError(`User with email ${email} not found. They must register first.`, 404));
     }
 
-    // This endpoint also changes an existing member's role (upsert). Never allow it to
-    // demote the organization's last active admin, which would lock everyone out.
-    const current = await orgRepo.validateMembership(user.id, organizationId);
-    if (current && current.role === 'admin' && role !== 'admin') {
-      const adminCount = await orgRepo.countActiveAdmins(organizationId);
-      if (adminCount <= 1) {
-        return next(new AppError('An organization must keep at least one admin. Promote another member to admin first.', 409));
-      }
-    }
-
-    const membership = await orgRepo.addMember(organizationId, user.id, role);
+    // This endpoint also changes an existing member's role (upsert). It never demotes the
+    // organization's last active admin (409) — checked under a per-organization lock so
+    // concurrent demotions cannot race past each other.
+    const membership = await orgRepo.setMemberRole({
+      organizationId,
+      actorId: req.user.id,
+      userId: user.id,
+      role,
+    });
 
     await auditRepo.log({
       organizationId,
