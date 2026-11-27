@@ -4,6 +4,7 @@ const { pool } = require('../db');
 const orgRepo = require('../repositories/org.repository');
 const userRepo = require('../repositories/user.repository');
 const auditRepo = require('../repositories/audit.repository');
+const invitationService = require('../invitations/invitation.service');
 const { checkRole } = require('../middleware/rbac');
 const rateLimiter = require('../middleware/rate-limiter');
 const { UUID_RE } = require('../middleware/tenant');
@@ -25,12 +26,27 @@ const orgWriteRateLimiter = rateLimiter({
   keyGenerator: (req) => `ratelimit:org-write:${req.user.id}`,
 });
 
+// Invitation creation/resend issue new tokens: an extra budget per admin per organization.
+// The UUID is lowercased so case variants of the same organization share one budget.
+const invitationSendRateLimiter = rateLimiter({
+  windowMs: 60 * 60 * 1000,
+  max: 30,
+  keyGenerator: (req) => `ratelimit:org-invite:${req.user.id}:${String(req.params.organizationId).toLowerCase()}`,
+});
+
 router.use(orgRateLimiter);
 
 // Reject malformed IDs before they reach PostgreSQL (a uuid cast error would surface as 500).
 router.param('organizationId', (req, res, next, organizationId) => {
   if (!UUID_RE.test(organizationId)) {
     return next(new AppError('Organization ID must be a valid UUID.', 400));
+  }
+  next();
+});
+
+router.param('invitationId', (req, res, next, invitationId) => {
+  if (!UUID_RE.test(invitationId)) {
+    return next(new AppError('Invitation ID must be a valid UUID.', 400));
   }
   next();
 });
@@ -44,6 +60,28 @@ const addMemberSchema = zod.object({
   email: zod.string().email('Valid email is required'),
   role: zod.enum(['admin', 'member', 'viewer']).default('member'),
 });
+
+const INVITATION_ROLES = ['admin', 'member', 'viewer'];
+const INVITATION_STATUSES = ['pending', 'accepted', 'revoked', 'expired'];
+
+// Normalized before validation: stored exactly as the migration-010 CHECK requires.
+const createInvitationSchema = zod.object({
+  email: zod.string('Valid email is required')
+    .trim()
+    .toLowerCase()
+    .max(254, 'Email must be at most 254 characters')
+    .email('Valid email is required'),
+  role: zod.enum(INVITATION_ROLES, { message: `Role must be one of: ${INVITATION_ROLES.join(', ')}` }),
+});
+
+const listInvitationsSchema = zod.object({
+  page: zod.coerce.number().int('page must be an integer').min(1, 'page must be at least 1').max(10000, 'page is too large').default(1),
+  limit: zod.coerce.number().int('limit must be an integer').min(1, 'limit must be at least 1').max(100, 'limit must be at most 100').default(20),
+  status: zod.enum(INVITATION_STATUSES, { message: `status must be one of: ${INVITATION_STATUSES.join(', ')}` }).optional(),
+});
+
+/** Responses carrying a raw invitation token must never be cached. */
+const noStore = (res) => res.set('Cache-Control', 'no-store');
 
 // Create Organization
 router.post('/', orgWriteRateLimiter, async (req, res, next) => {
@@ -167,6 +205,71 @@ router.post('/:organizationId/members', orgWriteRateLimiter, requireOrgAdmin, as
     });
 
     res.status(201).json({ status: 'success', data: { membership } });
+  } catch (err) {
+    next(AppError.from(err));
+  }
+});
+
+// ─── Invitations (Admin only) ────────────────────────────────────────────────
+
+// Create invitation: returns the raw token (once) and, if APP_BASE_URL is set, the invite URL
+router.post('/:organizationId/invitations', orgWriteRateLimiter, invitationSendRateLimiter, requireOrgAdmin, async (req, res, next) => {
+  try {
+    const parseResult = createInvitationSchema.safeParse(req.body);
+    if (!parseResult.success) {
+      return next(AppError.fromZod(parseResult.error));
+    }
+    const result = await invitationService.createInvitation({
+      organizationId: req.params.organizationId,
+      actorId: req.user.id,
+      ...parseResult.data,
+    });
+    noStore(res).status(201).json({ status: 'success', data: result });
+  } catch (err) {
+    next(AppError.from(err));
+  }
+});
+
+// List invitations (paginated, optional effective-status filter; never includes tokens)
+router.get('/:organizationId/invitations', requireOrgAdmin, async (req, res, next) => {
+  try {
+    const parseResult = listInvitationsSchema.safeParse(req.query);
+    if (!parseResult.success) {
+      return next(AppError.fromZod(parseResult.error));
+    }
+    const result = await invitationService.listInvitations({
+      organizationId: req.params.organizationId,
+      ...parseResult.data,
+    });
+    res.status(200).json({ status: 'success', data: result });
+  } catch (err) {
+    next(AppError.from(err));
+  }
+});
+
+// Revoke a pending invitation
+router.delete('/:organizationId/invitations/:invitationId', orgWriteRateLimiter, requireOrgAdmin, async (req, res, next) => {
+  try {
+    const result = await invitationService.revokeInvitation({
+      organizationId: req.params.organizationId,
+      actorId: req.user.id,
+      invitationId: req.params.invitationId,
+    });
+    res.status(200).json({ status: 'success', data: result });
+  } catch (err) {
+    next(AppError.from(err));
+  }
+});
+
+// Resend: new token (the previous one stops working) and a fresh 72-hour expiry
+router.post('/:organizationId/invitations/:invitationId/resend', orgWriteRateLimiter, invitationSendRateLimiter, requireOrgAdmin, async (req, res, next) => {
+  try {
+    const result = await invitationService.resendInvitation({
+      organizationId: req.params.organizationId,
+      actorId: req.user.id,
+      invitationId: req.params.invitationId,
+    });
+    noStore(res).status(200).json({ status: 'success', data: result });
   } catch (err) {
     next(AppError.from(err));
   }

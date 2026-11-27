@@ -1,0 +1,40 @@
+# DocuMind Prometheus configuration — production compose (docker-compose.prod.yml).
+# API and worker run as containers on the internal "data" network and are scraped by
+# service name. Alert rules are shared with development (backend/config/prometheus/alerts.yml).
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+scrape_configs:
+  - job_name: documind-api
+    metrics_path: /metrics
+    # /metrics is served only to private-network clients (it is blocked at Nginx).
+    # If METRICS_TOKEN is set, mount the token file and uncomment:
+    # authorization:
+    #   type: Bearer
+    #   credentials_file: /etc/prometheus/metrics_token
+    dns_sd_configs:
+      - names: [api]
+        type: A
+        port: 3000
+    relabel_configs:
+      - target_label: component
+        replacement: api
+
+  - job_name: documind-worker
+    metrics_path: /metrics
+    # A-record discovery scrapes every worker replica (docker compose --scale worker=N).
+    dns_sd_configs:
+      - names: [worker]
+        type: A
+        port: 9464
+    relabel_configs:
+      - target_label: component
+        replacement: worker
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ['localhost:9090']

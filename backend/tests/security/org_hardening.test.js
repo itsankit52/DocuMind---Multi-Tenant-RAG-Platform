@@ -236,7 +236,7 @@ describe('2. Last-admin protection under concurrency', () => {
       await lock.release();
     }
     expect(res.status).toBe(409);
-    expect(res.body.message).toMatch(/in progress\. Please retry/);
+    expect(res.body.message).toBe('Another change to this organization is in progress. Please retry.');
     const { rows } = await pool.query('SELECT role FROM memberships WHERE organization_id = $1 AND user_id = $2', [org.orgId, org.users.member.id]);
     expect(rows[0].role).toBe('admin');
   });

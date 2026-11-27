@@ -154,7 +154,7 @@ class DocumentService {
             checksum,
             jobId: job.id,
           },
-        });
+        }, client); // same transaction as the change it records
 
         return { doc, job, outbox, jobPayload };
       });
@@ -284,7 +284,7 @@ class DocumentService {
         action: 'DOCUMENT_REPROCESS_TRIGGERED',
         resourceId: documentId,
         metadata: { jobId: job.id },
-      });
+      }, client); // same transaction as the change it records
 
       return { doc, job, outbox, jobPayload };
     });
@@ -345,7 +345,7 @@ class DocumentService {
           filename: doc.filename,
           storageKey: doc.storage_key,
         },
-      });
+      }, client); // same transaction as the change it records
 
       return { doc, deletedDoc };
     });
@@ -393,7 +393,7 @@ class DocumentService {
           previousFilename: doc.filename,
           newFilename: safeName,
         },
-      });
+      }, client); // same transaction as the change it records
 
       return updated;
     });

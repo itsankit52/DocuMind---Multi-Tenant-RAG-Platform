@@ -118,6 +118,16 @@ export function AuthProvider({ children }) {
     await refreshUser();
   }, [refreshUser]);
 
+  /**
+   * After an invitation was accepted: reload memberships from the backend and make the
+   * joined organization active (same convention as createOrganization). Other memberships
+   * are untouched; the organization is only selected if the backend lists it.
+   */
+  const joinOrganization = useCallback(async (organizationId) => {
+    writeOrgPreference(organizationId);
+    await refreshUser();
+  }, [refreshUser]);
+
   const activeOrganization = useMemo(
     () => organizations.find(o => o.organization_id === activeOrgId) || null,
     [organizations, activeOrgId],
@@ -137,8 +147,9 @@ export function AuthProvider({ children }) {
     refreshUser,
     selectOrganization,
     createOrganization,
+    joinOrganization,
   }), [user, organizations, activeOrganization, loading, sessionExpired,
-    login, register, logout, refreshUser, selectOrganization, createOrganization]);
+    login, register, logout, refreshUser, selectOrganization, createOrganization, joinOrganization]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

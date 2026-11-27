@@ -149,7 +149,7 @@ describe('Document processing metrics', () => {
     const before = await metricValue('document_processing_jobs_total', { outcome: 'retried' });
     const inProgress = await metricValue('document_processing_in_progress');
     const c = controls();
-    await processor.processJob({ jobId: 'job-1', documentId: '0190f7a2-0000-7000-8000-00000000d0c1' }, c);
+    await processor.processJob({ jobId: 'job-1', documentId: '0190f7a2-0000-7000-8000-00000000d0c1', organizationId: ORG }, c);
     expect(c.retry).toHaveBeenCalled();
     expect(await metricValue('document_processing_jobs_total', { outcome: 'retried' })).toBe(before + 1);
     expect(await metricValue('document_processing_in_progress')).toBe(inProgress);
@@ -168,7 +168,7 @@ describe('Document processing metrics', () => {
       duration: await metricValue('document_processing_duration_seconds_count', { outcome: 'failed' }),
     };
     const c = controls();
-    await processor.processJob({ jobId: 'job-2', documentId: '0190f7a2-0000-7000-8000-00000000d0c2' }, c);
+    await processor.processJob({ jobId: 'job-2', documentId: '0190f7a2-0000-7000-8000-00000000d0c2', organizationId: ORG }, c);
     expect(dlq).toHaveBeenCalled();
     expect(c.ack).toHaveBeenCalled();
     expect(await metricValue('document_processing_jobs_total', { outcome: 'failed' })).toBe(before.failed + 1);

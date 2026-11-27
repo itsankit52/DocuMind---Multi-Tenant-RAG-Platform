@@ -12,6 +12,7 @@ import { organizationApi } from '../api/endpoints';
 import { ROLE_LABELS, ROLES, useAuth } from '../context/AuthContext';
 import { Alert, EmptyState, Spinner } from '../components/Feedback';
 import { formatDateTime } from '../utils/format';
+import { InvitationsPanel } from '../components/InvitationsPanel';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -81,6 +82,8 @@ export function MembersPage() {
           <p className="muted">{activeOrganization?.name} · manage who can access this organization and what they can do</p>
         </div>
       </header>
+
+      <InvitationsPanel orgId={orgId} />
 
       <AddMemberForm orgId={orgId} onAdded={async (msg) => { await load(); setNotice(msg); }} />
 

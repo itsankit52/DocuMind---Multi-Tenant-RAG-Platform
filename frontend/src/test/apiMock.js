@@ -10,3 +10,6 @@ export const documentApi = {
 export const conversationApi = {
   list: vi.fn(), create: vi.fn(), get: vi.fn(), rename: vi.fn(), remove: vi.fn(), sendMessage: vi.fn(),
 };
+export const invitationApi = {
+  create: vi.fn(), list: vi.fn(), revoke: vi.fn(), resend: vi.fn(), preview: vi.fn(), accept: vi.fn(),
+};

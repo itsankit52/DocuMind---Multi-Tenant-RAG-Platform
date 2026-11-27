@@ -1,4 +1,5 @@
-import { Link } from 'react-router-dom';
+import { useState } from 'react';
+import { Link, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useDocuments } from '../hooks/useDocuments';
 import { useConversations } from '../hooks/useConversations';
@@ -9,6 +10,9 @@ const STATS_SAMPLE = 100; // largest page the list API returns
 
 export function DashboardPage() {
   const { activeOrganization, user } = useAuth();
+  const location = useLocation();
+  // One-time message from a flow that navigated here (e.g. invitation accepted). Text only.
+  const [notice, setNotice] = useState(() => (typeof location.state?.notice === 'string' ? location.state.notice : null));
   const orgId = activeOrganization?.organization_id;
   const docs = useDocuments(orgId, { limit: STATS_SAMPLE });
   const convs = useConversations(orgId);
@@ -31,6 +35,7 @@ export function DashboardPage() {
         </div>
       </header>
 
+      {notice && <Alert tone="success" message={notice} onDismiss={() => setNotice(null)} />}
       {docs.error && <Alert error={docs.error} onRetry={() => docs.reload()} />}
       <section className="stat-grid" aria-label="Document statistics" aria-busy={docs.loading}>
         <Stat label="Total documents" value={docs.loading ? '…' : docs.totalCount} />

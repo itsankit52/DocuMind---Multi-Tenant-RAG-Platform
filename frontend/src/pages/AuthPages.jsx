@@ -2,10 +2,17 @@ import { useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { Alert } from '../components/Feedback';
+import { setPendingInvitationFromLink } from '../invitations/invitationToken';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-function AuthCard({ title, children }) {
+/** Path to return to after sign-in/registration: an in-app path only (never a full URL or token). */
+function returnPath(location) {
+  const from = location.state?.from;
+  return typeof from === 'string' && from.startsWith('/') && !from.startsWith('//') ? from : null;
+}
+
+export function AuthCard({ title, children }) {
   return (
     <div className="auth-page">
       <div className="auth-card">
@@ -37,7 +44,7 @@ export function LoginPage() {
     setError(null);
     try {
       await login(email.trim(), password);
-      navigate(location.state?.from || '/', { replace: true });
+      navigate(returnPath(location) || '/', { replace: true });
     } catch (err) {
       setError(err.status === 401 || err.status === 400
         ? { message: 'Invalid email or password.' }
@@ -48,6 +55,7 @@ export function LoginPage() {
 
   return (
     <AuthCard title="Sign in">
+      {returnPath(location) === '/invite' && <Alert tone="info" message="Sign in to continue with your invitation." />}
       {sessionExpired && !error && <Alert tone="info" message="Your session has expired. Please sign in again." />}
       <form onSubmit={onSubmit} noValidate className="form">
         <label className="field-label" htmlFor="login-email">Email</label>
@@ -61,7 +69,7 @@ export function LoginPage() {
           {submitting ? 'Signing in…' : 'Sign in'}
         </button>
       </form>
-      <p className="auth-switch">No account? <Link to="/register">Create one</Link></p>
+      <p className="auth-switch">No account? <Link to="/register" state={location.state}>Create one</Link></p>
     </AuthCard>
   );
 }
@@ -69,6 +77,7 @@ export function LoginPage() {
 export function RegisterPage() {
   const { register } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
   const [form, setForm] = useState({ fullName: '', email: '', password: '', confirm: '' });
   const [error, setError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
@@ -86,7 +95,7 @@ export function RegisterPage() {
     setError(null);
     try {
       await register({ email: form.email.trim(), password: form.password, fullName: form.fullName.trim() });
-      navigate('/', { replace: true });
+      navigate(returnPath(location) || '/', { replace: true });
     } catch (err) {
       setError(err);
       setSubmitting(false);
@@ -95,6 +104,9 @@ export function RegisterPage() {
 
   return (
     <AuthCard title="Create your account">
+      {returnPath(location) === '/invite' && (
+        <Alert tone="info" message="Use the email address that received the invitation. You'll return to it after creating your account." />
+      )}
       <form onSubmit={onSubmit} noValidate className="form">
         <label className="field-label" htmlFor="reg-name">Full name</label>
         <input id="reg-name" className="input" autoComplete="name" value={form.fullName} onChange={set('fullName')} />
@@ -109,8 +121,51 @@ export function RegisterPage() {
           {submitting ? 'Creating account…' : 'Create account'}
         </button>
       </form>
-      <p className="auth-switch">Already registered? <Link to="/login">Sign in</Link></p>
+      <p className="auth-switch">Already registered? <Link to="/login" state={location.state}>Sign in</Link></p>
     </AuthCard>
+  );
+}
+
+/**
+ * Onboarding → "Join an organization". Invitation-only: the only accepted input is an
+ * invitation link (or its token). There is no organization search, name or ID field.
+ */
+function JoinOrganizationOption() {
+  const navigate = useNavigate();
+  const [open, setOpen] = useState(false);
+  const [link, setLink] = useState('');
+  const [error, setError] = useState(null);
+
+  const onSubmit = (e) => {
+    e.preventDefault();
+    if (!setPendingInvitationFromLink(link)) {
+      setError({ message: 'That does not look like a complete invitation link. Copy the full link you received and try again.' });
+      return;
+    }
+    setLink(''); // the token now lives only in memory (see invitationToken.js)
+    navigate('/invite');
+  };
+
+  return (
+    <section className="join-option" aria-labelledby="join-heading">
+      <h3 id="join-heading" className="join-title">Join an organization</h3>
+      <p className="muted">Join an organization using an invitation link shared by its administrator.</p>
+      {!open ? (
+        <button type="button" className="btn btn-secondary btn-block" onClick={() => setOpen(true)}>
+          I have an invitation link
+        </button>
+      ) : (
+        <form onSubmit={onSubmit} noValidate className="form" aria-label="Open invitation link">
+          <label className="field-label" htmlFor="invite-link">Invitation link</label>
+          <input id="invite-link" className="input" type="url" autoComplete="off" spellCheck={false}
+            placeholder="Paste the link you received" value={link}
+            onChange={e => { setLink(e.target.value); setError(null); }} />
+          <p className="muted small">You can also simply open the link you received.</p>
+          <Alert error={error} />
+          <button type="submit" className="btn btn-primary btn-block">Continue</button>
+        </form>
+      )}
+    </section>
   );
 }
 
@@ -160,6 +215,7 @@ export function OnboardingPage() {
           {submitting ? 'Creating…' : 'Create organization'}
         </button>
       </form>
+      <JoinOrganizationOption />
       <p className="auth-switch">
         {organizations.length
           ? <Link to="/">Back to DocuMind</Link>

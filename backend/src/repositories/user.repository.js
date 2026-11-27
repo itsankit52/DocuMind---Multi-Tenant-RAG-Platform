@@ -9,8 +9,9 @@ class UserRepository {
     return rows[0];
   }
 
-  async findById(id) {
-    const { rows } = await pool.query(
+  /** `db` defaults to the pool; invitation acceptance passes its transaction client. */
+  async findById(id, db = pool) {
+    const { rows } = await db.query(
       'SELECT id, email, full_name, status FROM users WHERE id = $1',
       [id]
     );

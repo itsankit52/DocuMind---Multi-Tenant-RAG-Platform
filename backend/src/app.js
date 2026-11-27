@@ -5,13 +5,14 @@ const env = require('./config/env');
 const AppError = require('./utils/AppError');
 const authRoutes = require('./auth/auth.controller');
 const orgRoutes = require('./organizations/org.controller');
+const invitationRoutes = require('./invitations/invitation.controller');
 const documentRoutes = require('./documents/document.controller');
 const ragRoutes = require('./rag/rag.controller');
 const conversationRoutes = require('./conversations/conversation.controller');
 const authMiddleware = require('./middleware/auth');
 const tenantMiddleware = require('./middleware/tenant');
 const rateLimiter = require('./middleware/rate-limiter');
-const logger = require('./observability/logger');
+const { createErrorHandler, developmentDiagnosticsEnabled } = require('./middleware/error-handler');
 const { requestContext, tagRoute, httpMetrics, metricsHandler } = require('./observability/http');
 const { createHealthRouter } = require('./observability/health');
 
@@ -62,6 +63,7 @@ const ragRateLimiter = rateLimiter({
 // (tagRoute only records the mount path for low-cardinality metric labels)
 app.use('/api/auth', tagRoute, authRoutes);
 app.use('/api/organizations', tagRoute, authMiddleware, orgRoutes);
+app.use('/api/invitations', tagRoute, authMiddleware, invitationRoutes);
 app.use('/api/documents', tagRoute, authMiddleware, tenantMiddleware, documentRoutes);
 app.use('/api/rag', tagRoute, authMiddleware, tenantMiddleware, ragRateLimiter, ragRoutes);
 app.use('/api/conversations', tagRoute, authMiddleware, tenantMiddleware, conversationRoutes);
@@ -83,46 +85,15 @@ if (env.NODE_ENV !== 'production') app.get('/api/test/tenant', authMiddleware, t
   });
 });
 
-// 404 Handler
+// 404 Handler — path only: the query string (e.g. ?token=…) is never reflected to the client
 app.use((req, res, next) => {
-  next(new AppError(`Can't find ${req.originalUrl} on this server!`, 404));
+  next(new AppError(`Can't find ${req.path} on this server!`, 404));
 });
 
-// Centralized Error Handler
-app.use((err, req, res, next) => {
-  if (res.headersSent) {
-    return next(err);
-  }
-
-  err.statusCode = err.statusCode || 500;
-  err.status = err.status || 'error';
-
-  // Structured error log correlated by requestId (bodies, tokens and passwords are never logged)
-  if (err.statusCode >= 500) {
-    logger.error('Request failed', {
-      requestId: req.requestId,
-      method: req.method,
-      statusCode: err.statusCode,
-      error: err,
-      ...(err.isOperational ? {} : { stack: String(err.stack || '').split('\n').slice(0, 8).join('\n') }),
-    });
-  }
-
-  if (env.NODE_ENV === 'development') {
-    res.status(err.statusCode).json({
-      status: err.status,
-      message: err.message,
-      error: err,
-      stack: err.stack,
-    });
-  } else {
-    // Production / Test: don't leak stack traces
-    res.status(err.statusCode).json({
-      status: err.status,
-      message: err.isOperational ? err.message : 'Something went wrong!',
-    });
-  }
-});
+// Centralized Error Handler (src/middleware/error-handler.js). Detailed diagnostics only when
+// the process environment explicitly sets NODE_ENV=development (read after env.js loaded
+// .env) — never from the NODE_ENV default, and never from anything in a request.
+app.use(createErrorHandler({ developmentDiagnostics: developmentDiagnosticsEnabled(process.env.NODE_ENV) }));
 
 module.exports = app;
 

@@ -26,6 +26,34 @@ export const organizationApi = {
     http.post(`/organizations/${encodeURIComponent(organizationId)}/members`, { email, role }, { skipOrgHeader: true }).then(data),
 };
 
+// Admin invitation management (admin-only on the backend) and invitee preview/acceptance.
+// Raw invitation tokens pass through these functions only; they are never logged or stored.
+const orgPath = (organizationId) => `/organizations/${encodeURIComponent(organizationId)}/invitations`;
+
+export const invitationApi = {
+  // → { invitation, token, inviteUrl } (inviteUrl is null when the backend has no APP_BASE_URL)
+  create: (organizationId, { email, role }) =>
+    http.post(orgPath(organizationId), { email, role }, { skipOrgHeader: true }).then(data),
+  // → { invitations[], pagination: { page, limit, totalCount, totalPages } }
+  list: (organizationId, { page = 1, limit = 10, status } = {}, config = {}) =>
+    http.get(orgPath(organizationId), {
+      params: { page, limit, ...(status ? { status } : {}) }, skipOrgHeader: true, ...config,
+    }).then(data),
+  revoke: (organizationId, invitationId) =>
+    http.delete(`${orgPath(organizationId)}/${encodeURIComponent(invitationId)}`, { skipOrgHeader: true }).then(data),
+  // → { invitation, token, inviteUrl } — a NEW token; the previous link stops working
+  resend: (organizationId, invitationId) =>
+    http.post(`${orgPath(organizationId)}/${encodeURIComponent(invitationId)}/resend`, null, { skipOrgHeader: true }).then(data),
+  // Backend contract: POST /invitations/preview with { token } — the token travels only in the
+  // JSON body, never in a URL (URLs reach proxy/error logs). config may carry e.g. an AbortSignal.
+  // → { invitation: { organizationName, role, inviterName, expiresAt } }
+  preview: (token, config = {}) =>
+    http.post('/invitations/preview', { token }, { skipOrgHeader: true, ...config }).then(data),
+  // Only the token is sent: organization, role and email always come from the stored invitation.
+  // → { organization: { id, name }, membership: { role, status } }
+  accept: (token) => http.post('/invitations/accept', { token }, { skipOrgHeader: true }).then(data),
+};
+
 export const documentApi = {
   list: ({ page = 1, limit = 50 } = {}, config = {}) =>
     http.get('/documents', { params: { page, limit }, ...config }).then(data),

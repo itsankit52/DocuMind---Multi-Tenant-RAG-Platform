@@ -76,7 +76,8 @@ async function createOrgWithUsers(slug, roles = ['admin']) {
 async function truncateAll() {
   await pool.query(
     'TRUNCATE organizations, users, memberships, documents, document_processing_jobs, ' +
-    'document_chunks, outbox_events, conversations, messages, citations, audit_logs CASCADE',
+    'document_chunks, outbox_events, conversations, messages, citations, audit_logs, ' +
+    'organization_invitations CASCADE',
   );
 }
 

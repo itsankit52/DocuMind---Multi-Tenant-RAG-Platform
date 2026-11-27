@@ -1,5 +1,4 @@
 const crypto = require('crypto');
-const { pool } = require('../db');
 const { withTenantTransaction } = require('../db/transaction');
 const minioService = require('../storage/minio.service');
 const rabbitmqService = require('../queue/rabbitmq.service');
@@ -26,6 +25,9 @@ const recordStage = (stage, start) => safe(() => metrics.processingStageDuration
 
 // Carried on retried deliveries: how many times the job lookup has failed (database errors).
 const LOOKUP_ATTEMPTS_HEADER = 'x-documind-lookup-attempts';
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const JOB_NOT_FOUND = 'Job record not found in PostgreSQL';
 
 /** Thrown inside the processing transaction when this worker no longer owns the job. */
 class ClaimLostError extends Error {
@@ -74,10 +76,21 @@ class DocumentProcessor {
       return ack();
     }
 
-    // Step 1: Look up job in PostgreSQL to get trusted tenant context and claim it
+    // Step 1: Look up the job INSIDE the tenant named by the message (Phase 3.4 / F2). The message's
+    // organizationId is only a claim: RLS makes the job row visible solely if it belongs to that
+    // organization, so a missing, malformed or mismatched organizationId is "job not found" and
+    // is dead-lettered. Every producer (upload, reprocess, recovery) sets it from the job row.
+    if (typeof queueOrgId !== 'string' || !UUID_RE.test(queueOrgId)) {
+      console.error(`❌ Permanent Failure: Job ${jobId} message has no valid organizationId; treated as not found.`);
+      await rabbitmqService.publishDeadLetter(payload, JOB_NOT_FOUND);
+      recordJob('invalid');
+      return ack();
+    }
+    const claimedOrgId = queueOrgId.toLowerCase();
+
     let job;
     try {
-      job = await jobRepo.findById({ query: (q, v) => pool.query(q, v) }, jobId);
+      job = await withTenantTransaction(claimedOrgId, client => jobRepo.findById(client, jobId));
     } catch (err) {
       // Bounded: after JOB_LOOKUP_MAX_ATTEMPTS the delivery is dead-lettered (never dropped).
       // The job row itself is left to stale-job recovery once the database is back.
@@ -94,9 +107,11 @@ class DocumentProcessor {
       return retry(delayMs, { [LOOKUP_ATTEMPTS_HEADER]: lookupAttempt });
     }
 
-    if (!job) {
-      console.error(`❌ Permanent Failure: Job ${jobId} not found in database.`);
-      await rabbitmqService.publishDeadLetter(payload, 'Job record not found in PostgreSQL');
+    // Defence in depth: RLS already hides other organizations' jobs; a row that does not match
+    // the claimed organization is still never processed.
+    if (!job || job.organization_id !== claimedOrgId) {
+      console.error(`❌ Permanent Failure: Job ${jobId} not found in database for the message's organization.`);
+      await rabbitmqService.publishDeadLetter(payload, JOB_NOT_FOUND);
       recordJob('invalid');
       return ack();
     }
@@ -120,8 +135,8 @@ class DocumentProcessor {
       return ack();
     }
 
-    // Step 2: Claim the job atomically
-    const claimedJob = await jobRepo.claimJob({ query: (q, v) => pool.query(q, v) }, jobId, this.workerId);
+    // Step 2: Claim the job atomically (single conditional UPDATE, now under the job's tenant)
+    const claimedJob = await withTenantTransaction(trustedOrgId, client => jobRepo.claimJob(client, jobId, this.workerId));
     if (!claimedJob) {
       console.log(`ℹ️ Job ${jobId} already claimed or in progress by another worker.`);
       recordJob('skipped');
@@ -299,7 +314,7 @@ class DocumentProcessor {
             numPages: extractedData.numPages,
             durationMs: Date.now() - new Date(claimedJob.started_at || Date.now()).getTime(),
           },
-        });
+        }, client); // inside the tenant transaction: commits with the completed status
       });
 
       console.log(`✅ [${this.workerId}] Job ${jobId} COMPLETED successfully for Doc ${documentId}`);
@@ -328,10 +343,10 @@ class DocumentProcessor {
         console.log(`🔄 Retrying Job ${jobId} in ${retryDelayMs}ms...`);
 
         try {
-          await jobRepo.updateJobStatus({ query: (q, v) => pool.query(q, v) }, jobId, {
+          await withTenantTransaction(trustedOrgId, client => jobRepo.updateJobStatus(client, jobId, {
             status: 'retrying',
             errorLog: procErr.message,
-          });
+          }));
         } catch (dbErr) {
           console.error('Error updating job status to retrying:', dbErr.message);
         }
@@ -343,38 +358,41 @@ class DocumentProcessor {
         console.error(`❌ [${this.workerId}] Job ${jobId} permanently FAILED after ${currentAttempt} attempts.`);
 
         try {
-          await jobRepo.updateJobStatus({ query: (q, v) => pool.query(q, v) }, jobId, {
-            status: 'failed',
-            errorLog: procErr.message,
-            finishedAt: new Date(),
+          // One tenant transaction: the job, the document and the audit entry fail together.
+          await withTenantTransaction(trustedOrgId, async (client) => {
+            await jobRepo.updateJobStatus(client, jobId, {
+              status: 'failed',
+              errorLog: procErr.message,
+              finishedAt: new Date(),
+            });
+
+            // RLS scopes this to the job's organization; the explicit filter stays as a second guard
+            await client.query(
+              "UPDATE documents SET status = 'failed', updated_at = now() WHERE id = $1 AND organization_id = $2",
+              [documentId, trustedOrgId]
+            );
+
+            await auditRepo.log({
+              organizationId: trustedOrgId,
+              actorId: null, // System worker event has no human actor
+              action: 'DOCUMENT_PROCESSING_FAILED',
+              resourceId: documentId,
+              metadata: {
+                jobId,
+                workerId: this.workerId,
+                attempts: currentAttempt,
+                error: procErr.message,
+              },
+            }, client);
           });
 
-          // Runs outside a tenant transaction, so scope explicitly by the trusted org
-          await pool.query(
-            "UPDATE documents SET status = 'failed', updated_at = now() WHERE id = $1 AND organization_id = $2",
-            [documentId, trustedOrgId]
-          );
-
-          // The transaction rolled back, but Qdrant is not transactional: remove any vectors
-          // this attempt already upserted so a failed/deleted document leaves no orphans.
+          // The processing transaction rolled back, but Qdrant is not transactional: remove any
+          // vectors this attempt already upserted so a failed/deleted document leaves no orphans.
           await qdrantService.deleteByDocument({
             organizationId: trustedOrgId,
             documentId,
             collectionName: env.QDRANT_COLLECTION,
           }).catch(err => console.error('Qdrant cleanup after failure failed:', err.message));
-
-          await auditRepo.log({
-            organizationId: trustedOrgId,
-            actorId: null, // System worker event has no human actor
-            action: 'DOCUMENT_PROCESSING_FAILED',
-            resourceId: documentId,
-            metadata: {
-              jobId,
-              workerId: this.workerId,
-              attempts: currentAttempt,
-              error: procErr.message,
-            },
-          });
         } catch (dbErr) {
           console.error('Error recording job failure in database:', dbErr.message);
         }
