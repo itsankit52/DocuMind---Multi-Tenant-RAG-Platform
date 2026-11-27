@@ -9,12 +9,19 @@ class UserRepository {
     return rows[0];
   }
 
-  async findById(id) {
-    const { rows } = await pool.query(
+  /** `db` defaults to the pool; invitation acceptance passes its transaction client. */
+  async findById(id, db = pool) {
+    const { rows } = await db.query(
       'SELECT id, email, full_name, status FROM users WHERE id = $1',
       [id]
     );
     return rows[0];
+  }
+
+  /** The stored password hash, or null (Google-only account / unknown user). Never returned to clients. */
+  async findPasswordHash(id) {
+    const { rows } = await pool.query('SELECT password_hash FROM users WHERE id = $1', [id]);
+    return rows[0] ? rows[0].password_hash : null;
   }
 
   async create({ email, passwordHash, fullName }) {

@@ -105,12 +105,18 @@ describe('Step 4 — Complete Security, RLS & Multi-Tenant Test Suite', () => {
     eveToken = jwt.sign({ userId: eveId }, env.JWT_ACCESS_SECRET, { expiresIn: '1h' });
     viewerToken = jwt.sign({ userId: viewerId }, env.JWT_ACCESS_SECRET, { expiresIn: '1h' });
 
-    // 7. Flush Redis cache/ratelimit keys for clean test state
+    // 7. Reset rate-limit counters for a clean test state. Only the application's
+    // `ratelimit:*` namespace is deleted (SCAN, not KEYS/FLUSHALL): the test Redis is shared
+    // with development, and FLUSHALL would wipe every key in every database.
     const redisClient = getRedisClient();
     if (!redisClient.isOpen) {
       await redisClient.connect();
     }
-    await redisClient.flushAll();
+    const rateLimitKeys = [];
+    for await (const keys of redisClient.scanIterator({ MATCH: 'ratelimit:*', COUNT: 500 })) {
+      rateLimitKeys.push(...(Array.isArray(keys) ? keys : [keys]));
+    }
+    if (rateLimitKeys.length) await redisClient.del(rateLimitKeys);
   });
 
   afterAll(async () => {

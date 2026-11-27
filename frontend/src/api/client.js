@@ -59,14 +59,18 @@ export class ApiError extends Error {
   }
 }
 
+// Stable machine-readable codes the backend may add (e.g. ALREADY_ORGANIZATION_MEMBER).
+const ERROR_CODE_RE = /^[A-Z][A-Z0-9_]{0,63}$/;
+
 /** Convert any failure into an ApiError with a message that is safe to display. */
-export function toApiError(status, serverMessage) {
+export function toApiError(status, serverMessage, serverCode) {
   const s = Number(status) || 0;
   let message = SAFE_MESSAGES[s] || (s >= 500 ? SAFE_MESSAGES[500] : 'The request could not be completed.');
   if (PASS_THROUGH.has(s) && typeof serverMessage === 'string' && serverMessage.trim()) {
     message = serverMessage.trim().slice(0, 300);
   }
-  return new ApiError(s, message);
+  const code = typeof serverCode === 'string' && ERROR_CODE_RE.test(serverCode) ? serverCode : null;
+  return new ApiError(s, message, code);
 }
 
 export function normalizeError(err) {
@@ -77,9 +81,11 @@ export function normalizeError(err) {
     return e;
   }
   if (err?.response) {
-    return toApiError(err.response.status, err.response.data?.message);
+    return toApiError(err.response.status, err.response.data?.message, err.response.data?.code);
   }
-  if (import.meta.env.DEV && err) console.warn('[api] network error', err);
+  // Never log the error object itself: an AxiosError carries the request config, including
+  // the body (e.g. an invitation token) and query parameters.
+  if (import.meta.env.DEV && err) console.warn('[api] network error', err.code || err.message || 'unknown');
   return toApiError(0);
 }
 

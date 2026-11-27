@@ -3,8 +3,18 @@ const env = require('../config/env');
 const { metrics, safe, secondsSince } = require('../observability/metrics');
 const logger = require('../observability/logger');
 
+/**
+ * The worker process (src/worker.js sets DOCUMIND_PROCESS_ROLE=worker before loading this module)
+ * connects with WORKER_DATABASE_URL when it is configured; everything else uses DATABASE_URL.
+ * The chosen URL is never logged.
+ */
+function connectionStringFor(processRole, config) {
+  if (processRole === 'worker' && config.WORKER_DATABASE_URL) return config.WORKER_DATABASE_URL;
+  return config.DATABASE_URL;
+}
+
 const pool = new Pool({
-  connectionString: env.DATABASE_URL,
+  connectionString: connectionStringFor(process.env.DOCUMIND_PROCESS_ROLE, env),
   max: env.DATABASE_POOL_MAX,
 });
 
@@ -60,4 +70,5 @@ module.exports = {
   query: (text, params) => pool.query(text, params),
   pool,
   sqlOperation,
+  connectionStringFor,
 };

@@ -4,10 +4,52 @@ const { pool } = require('../db');
 const orgRepo = require('../repositories/org.repository');
 const userRepo = require('../repositories/user.repository');
 const auditRepo = require('../repositories/audit.repository');
+const invitationService = require('../invitations/invitation.service');
 const { checkRole } = require('../middleware/rbac');
+const rateLimiter = require('../middleware/rate-limiter');
+const { UUID_RE } = require('../middleware/tenant');
 const AppError = require('../utils/AppError');
 
 const router = express.Router();
+
+// Mounted behind authMiddleware, so budgets are per user (not per IP behind a shared NAT).
+const orgRateLimiter = rateLimiter({
+  windowMs: 60 * 1000,
+  max: 120,
+  keyGenerator: (req) => `ratelimit:org:${req.user.id}`,
+});
+
+// Tighter budget for state-changing requests (organization creation, member/role changes).
+const orgWriteRateLimiter = rateLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: 60,
+  keyGenerator: (req) => `ratelimit:org-write:${req.user.id}`,
+});
+
+// Invitation creation/resend issue new tokens: an extra budget per admin per organization.
+// The UUID is lowercased so case variants of the same organization share one budget.
+const invitationSendRateLimiter = rateLimiter({
+  windowMs: 60 * 60 * 1000,
+  max: 30,
+  keyGenerator: (req) => `ratelimit:org-invite:${req.user.id}:${String(req.params.organizationId).toLowerCase()}`,
+});
+
+router.use(orgRateLimiter);
+
+// Reject malformed IDs before they reach PostgreSQL (a uuid cast error would surface as 500).
+router.param('organizationId', (req, res, next, organizationId) => {
+  if (!UUID_RE.test(organizationId)) {
+    return next(new AppError('Organization ID must be a valid UUID.', 400));
+  }
+  next();
+});
+
+router.param('invitationId', (req, res, next, invitationId) => {
+  if (!UUID_RE.test(invitationId)) {
+    return next(new AppError('Invitation ID must be a valid UUID.', 400));
+  }
+  next();
+});
 
 const createOrgSchema = zod.object({
   name: zod.string().min(2, 'Organization name must be at least 2 characters'),
@@ -19,8 +61,30 @@ const addMemberSchema = zod.object({
   role: zod.enum(['admin', 'member', 'viewer']).default('member'),
 });
 
+const INVITATION_ROLES = ['admin', 'member', 'viewer'];
+const INVITATION_STATUSES = ['pending', 'accepted', 'revoked', 'expired'];
+
+// Normalized before validation: stored exactly as the migration-010 CHECK requires.
+const createInvitationSchema = zod.object({
+  email: zod.string('Valid email is required')
+    .trim()
+    .toLowerCase()
+    .max(254, 'Email must be at most 254 characters')
+    .email('Valid email is required'),
+  role: zod.enum(INVITATION_ROLES, { message: `Role must be one of: ${INVITATION_ROLES.join(', ')}` }),
+});
+
+const listInvitationsSchema = zod.object({
+  page: zod.coerce.number().int('page must be an integer').min(1, 'page must be at least 1').max(10000, 'page is too large').default(1),
+  limit: zod.coerce.number().int('limit must be an integer').min(1, 'limit must be at least 1').max(100, 'limit must be at most 100').default(20),
+  status: zod.enum(INVITATION_STATUSES, { message: `status must be one of: ${INVITATION_STATUSES.join(', ')}` }).optional(),
+});
+
+/** Responses carrying a raw invitation token must never be cached. */
+const noStore = (res) => res.set('Cache-Control', 'no-store');
+
 // Create Organization
-router.post('/', async (req, res, next) => {
+router.post('/', orgWriteRateLimiter, async (req, res, next) => {
   try {
     const parseResult = createOrgSchema.safeParse(req.body);
     if (!parseResult.success) {
@@ -34,15 +98,8 @@ router.post('/', async (req, res, next) => {
       return next(new AppError('Organization with this slug already exists.', 400));
     }
 
+    // Creates the organization, the creator's admin membership and the ORG_CREATE audit entry atomically
     const org = await orgRepo.create({ name, slug, ownerId: req.user.id });
-
-    await auditRepo.log({
-      organizationId: org.id,
-      actorId: req.user.id,
-      action: 'ORG_CREATE',
-      resourceId: org.id,
-      metadata: { name, slug },
-    });
 
     res.status(201).json({ status: 'success', data: { org } });
   } catch (err) {
@@ -86,7 +143,12 @@ router.post('/:organizationId/select', async (req, res, next) => {
 // Middleware to verify that the user has admin role in the target organization
 async function requireOrgAdmin(req, res, next) {
   const { organizationId } = req.params;
-  const membership = await orgRepo.validateMembership(req.user.id, organizationId);
+  let membership;
+  try {
+    membership = await orgRepo.validateMembership(req.user.id, organizationId);
+  } catch (err) {
+    return next(AppError.from(err));
+  }
 
   if (!membership || membership.role !== 'admin') {
     return next(new AppError('Admin privileges required for this organization.', 403));
@@ -109,7 +171,7 @@ router.get('/:organizationId/members', requireOrgAdmin, async (req, res, next) =
 });
 
 // Add member to organization (Admin only)
-router.post('/:organizationId/members', requireOrgAdmin, async (req, res, next) => {
+router.post('/:organizationId/members', orgWriteRateLimiter, requireOrgAdmin, async (req, res, next) => {
   try {
     const { organizationId } = req.params;
     const parseResult = addMemberSchema.safeParse(req.body);
@@ -121,30 +183,111 @@ router.post('/:organizationId/members', requireOrgAdmin, async (req, res, next) 
     const user = await userRepo.findByEmail(email);
 
     if (!user) {
-      return next(new AppError(`User with email ${email} not found. They must register first.`, 404));
+      // The address is not echoed back: responses and logs never carry it.
+      return next(new AppError('No registered user has that email address. They must register first.', 404));
     }
 
-    // This endpoint also changes an existing member's role (upsert). Never allow it to
-    // demote the organization's last active admin, which would lock everyone out.
-    const current = await orgRepo.validateMembership(user.id, organizationId);
-    if (current && current.role === 'admin' && role !== 'admin') {
-      const adminCount = await orgRepo.countActiveAdmins(organizationId);
-      if (adminCount <= 1) {
-        return next(new AppError('An organization must keep at least one admin. Promote another member to admin first.', 409));
-      }
-    }
+    // This endpoint also changes an existing member's role (upsert). It never demotes the
+    // organization's last active admin (409) — checked under a per-organization lock so
+    // concurrent demotions cannot race past each other.
+    const { membership, previousRole } = await orgRepo.setMemberRole({
+      organizationId,
+      actorId: req.user.id,
+      userId: user.id,
+      role,
+    });
 
-    const membership = await orgRepo.addMember(organizationId, user.id, role);
-
+    // A new (or re-added) member is MEMBER_ADD; a change of an active member's role is its own event.
+    const roleChange = previousRole !== null;
     await auditRepo.log({
       organizationId,
       actorId: req.user.id,
-      action: 'MEMBER_ADD',
+      action: roleChange ? 'MEMBER_ROLE_CHANGE' : 'MEMBER_ADD',
       resourceId: user.id,
-      metadata: { email, role },
+      metadata: roleChange ? { email, previousRole, role } : { email, role },
     });
 
     res.status(201).json({ status: 'success', data: { membership } });
+  } catch (err) {
+    next(AppError.from(err));
+  }
+});
+
+// Remove a member (Admin only). Soft removal; refuses the last active admin (409).
+// An admin may remove themselves only while another active admin remains.
+router.delete('/:organizationId/members/:userId', orgWriteRateLimiter, requireOrgAdmin, async (req, res, next) => {
+  try {
+    const { organizationId, userId } = req.params;
+    if (!UUID_RE.test(userId)) {
+      return next(new AppError('User ID must be a valid UUID.', 400));
+    }
+    const removed = await orgRepo.removeMember({ organizationId, actorId: req.user.id, userId: userId.toLowerCase() });
+    res.status(200).json({ status: 'success', data: { removed } });
+  } catch (err) {
+    next(AppError.from(err));
+  }
+});
+
+// ─── Invitations (Admin only) ────────────────────────────────────────────────
+
+// Create invitation: returns the raw token (once) and, if APP_BASE_URL is set, the invite URL
+router.post('/:organizationId/invitations', orgWriteRateLimiter, invitationSendRateLimiter, requireOrgAdmin, async (req, res, next) => {
+  try {
+    const parseResult = createInvitationSchema.safeParse(req.body);
+    if (!parseResult.success) {
+      return next(AppError.fromZod(parseResult.error));
+    }
+    const result = await invitationService.createInvitation({
+      organizationId: req.params.organizationId,
+      actorId: req.user.id,
+      ...parseResult.data,
+    });
+    noStore(res).status(201).json({ status: 'success', data: result });
+  } catch (err) {
+    next(AppError.from(err));
+  }
+});
+
+// List invitations (paginated, optional effective-status filter; never includes tokens)
+router.get('/:organizationId/invitations', requireOrgAdmin, async (req, res, next) => {
+  try {
+    const parseResult = listInvitationsSchema.safeParse(req.query);
+    if (!parseResult.success) {
+      return next(AppError.fromZod(parseResult.error));
+    }
+    const result = await invitationService.listInvitations({
+      organizationId: req.params.organizationId,
+      ...parseResult.data,
+    });
+    res.status(200).json({ status: 'success', data: result });
+  } catch (err) {
+    next(AppError.from(err));
+  }
+});
+
+// Revoke a pending invitation
+router.delete('/:organizationId/invitations/:invitationId', orgWriteRateLimiter, requireOrgAdmin, async (req, res, next) => {
+  try {
+    const result = await invitationService.revokeInvitation({
+      organizationId: req.params.organizationId,
+      actorId: req.user.id,
+      invitationId: req.params.invitationId,
+    });
+    res.status(200).json({ status: 'success', data: result });
+  } catch (err) {
+    next(AppError.from(err));
+  }
+});
+
+// Resend: new token (the previous one stops working) and a fresh 72-hour expiry
+router.post('/:organizationId/invitations/:invitationId/resend', orgWriteRateLimiter, invitationSendRateLimiter, requireOrgAdmin, async (req, res, next) => {
+  try {
+    const result = await invitationService.resendInvitation({
+      organizationId: req.params.organizationId,
+      actorId: req.user.id,
+      invitationId: req.params.invitationId,
+    });
+    noStore(res).status(200).json({ status: 'success', data: result });
   } catch (err) {
     next(AppError.from(err));
   }

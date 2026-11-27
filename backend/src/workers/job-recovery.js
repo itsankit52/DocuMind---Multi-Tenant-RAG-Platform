@@ -6,8 +6,13 @@
  * the claim fails and that delivery is acked; the outbox event is already 'published'.
  * Without this sweep nothing would ever pick the job up again.
  *
- * Each sweep, in one transaction:
- *  - selects jobs that are provably abandoned: 'processing' with an expired lock, or
+ * Each sweep (Phase 3.4 / F2: no BYPASSRLS needed):
+ *  - discovers candidate (job_id, organization_id) pairs across tenants through the read-only
+ *    SECURITY DEFINER function worker_stale_job_candidates() (migration 013), which only lists
+ *    ids and never decides or locks anything;
+ *  - then handles EACH candidate in its own withTenantTransaction(organization_id) — RLS-scoped,
+ *    atomic per job — re-checking the same staleness rule under FOR UPDATE SKIP LOCKED. The rule
+ *    selects jobs that are provably abandoned: 'processing' with an expired lock, or
  *    'pending'/'queued'/'retrying' untouched for the lock timeout (their message was lost or
  *    dead-lettered). FOR UPDATE SKIP LOCKED skips rows locked by a live processing run (the
  *    processor holds its job row for the whole run) and rows another sweeper is handling, so
@@ -23,12 +28,16 @@
  */
 
 const { pool } = require('../db');
+const { withTenantTransaction } = require('../db/transaction');
 const env = require('../config/env');
 const outboxRepo = require('../repositories/outbox.repository');
+const auditRepo = require('../repositories/audit.repository');
 const logger = require('../observability/logger');
 const { metrics, safe } = require('../observability/metrics');
 
-const RECOVER_SQL = `
+// Runs inside the candidate's tenant transaction (RLS): re-checks the staleness rule for ONE job
+// under its row lock. A job taken by a live run, another sweeper, or no longer stale is skipped.
+const RECOVER_ONE_SQL = `
   WITH stale AS (
     SELECT j.id,
            j.status AS previous_status,
@@ -37,12 +46,11 @@ const RECOVER_SQL = `
              WHERE n.document_id = j.document_id AND n.id <> j.id AND n.created_at > j.created_at
            ) AS superseded
     FROM document_processing_jobs j
-    WHERE (j.status = 'processing'
-           AND COALESCE(j.locked_at, j.updated_at) < now() - make_interval(mins => $1::int))
-       OR (j.status IN ('pending', 'queued', 'retrying')
-           AND j.updated_at < now() - make_interval(mins => $1::int))
-    ORDER BY j.updated_at
-    LIMIT $2
+    WHERE j.id = $2
+      AND ((j.status = 'processing'
+            AND COALESCE(j.locked_at, j.updated_at) < now() - make_interval(mins => $1::int))
+        OR (j.status IN ('pending', 'queued', 'retrying')
+            AND j.updated_at < now() - make_interval(mins => $1::int)))
     FOR UPDATE OF j SKIP LOCKED
   ), decided AS (
     SELECT s.*, (s.superseded OR j.attempts >= COALESCE(j.max_attempts, $3::int)) AS give_up
@@ -70,11 +78,55 @@ function outcomeOf(job) {
   return job.superseded ? 'superseded' : 'failed';
 }
 
+const CANDIDATES_SQL = 'SELECT job_id, organization_id FROM public.worker_stale_job_candidates($1, $2)';
+
+/** Same tenant transaction as the job update: the audit commits or rolls back with it. */
 async function audit(client, job, action, metadata) {
-  await client.query(
-    'INSERT INTO audit_logs (organization_id, actor_id, action, resource_id, metadata) VALUES ($1, NULL, $2, $3, $4)',
-    [job.organization_id, action, job.document_id, metadata],
-  );
+  await auditRepo.log({
+    organizationId: job.organization_id, actorId: null, action, resourceId: job.document_id, metadata,
+  }, client);
+}
+
+/** Recover one candidate inside its own tenant transaction. Returns the job row or null. */
+async function recoverOne(candidate, { lockTimeoutMinutes, maxAttempts }) {
+  return withTenantTransaction(candidate.organization_id, async (client) => {
+    const { rows: [job] } = await client.query(RECOVER_ONE_SQL, [lockTimeoutMinutes, candidate.job_id, maxAttempts]);
+    if (!job) return null;
+    const outcome = outcomeOf(job);
+    const metadata = {
+      jobId: job.id,
+      previousStatus: job.previous_status,
+      attempts: job.attempts,
+      maxAttempts: job.max_attempts,
+      outcome,
+    };
+
+    if (outcome === 'requeued') {
+      await outboxRepo.createEvent(client, {
+        organizationId: job.organization_id,
+        aggregateType: 'document',
+        aggregateId: job.document_id,
+        eventType: 'document.process',
+        payload: {
+          event: 'document.process',
+          jobId: job.id,
+          documentId: job.document_id,
+          organizationId: job.organization_id,
+          version: 1,
+          recovered: true,
+        },
+      });
+      await audit(client, job, 'DOCUMENT_PROCESSING_RECOVERED', metadata);
+    } else if (outcome === 'failed') {
+      await client.query(
+        `UPDATE documents SET status = 'failed', updated_at = now()
+         WHERE id = $1 AND organization_id = $2 AND deleted_at IS NULL AND status <> 'ready'`,
+        [job.document_id, job.organization_id],
+      );
+      await audit(client, job, 'DOCUMENT_PROCESSING_FAILED', { ...metadata, reason: 'abandoned' });
+    }
+    return job;
+  });
 }
 
 /**
@@ -85,54 +137,14 @@ async function recoverStaleJobs({
   lockTimeoutMinutes = env.JOB_LOCK_TIMEOUT_MINUTES,
   limit = env.JOB_RECOVERY_BATCH_SIZE,
 } = {}) {
-  const client = await pool.connect();
-  let jobs;
-  try {
-    await client.query('BEGIN');
-    ({ rows: jobs } = await client.query(RECOVER_SQL, [lockTimeoutMinutes, limit, env.MAX_PROCESSING_ATTEMPTS || 3]));
-
-    for (const job of jobs) {
-      const outcome = outcomeOf(job);
-      const metadata = {
-        jobId: job.id,
-        previousStatus: job.previous_status,
-        attempts: job.attempts,
-        maxAttempts: job.max_attempts,
-        outcome,
-      };
-
-      if (outcome === 'requeued') {
-        await outboxRepo.createEvent(client, {
-          organizationId: job.organization_id,
-          aggregateType: 'document',
-          aggregateId: job.document_id,
-          eventType: 'document.process',
-          payload: {
-            event: 'document.process',
-            jobId: job.id,
-            documentId: job.document_id,
-            organizationId: job.organization_id,
-            version: 1,
-            recovered: true,
-          },
-        });
-        await audit(client, job, 'DOCUMENT_PROCESSING_RECOVERED', metadata);
-      } else if (outcome === 'failed') {
-        await client.query(
-          `UPDATE documents SET status = 'failed', updated_at = now()
-           WHERE id = $1 AND organization_id = $2 AND deleted_at IS NULL AND status <> 'ready'`,
-          [job.document_id, job.organization_id],
-        );
-        await audit(client, job, 'DOCUMENT_PROCESSING_FAILED', { ...metadata, reason: 'abandoned' });
-      }
-    }
-
-    await client.query('COMMIT');
-  } catch (err) {
-    await client.query('ROLLBACK').catch(() => {});
-    throw err;
-  } finally {
-    client.release();
+  const maxAttempts = env.MAX_PROCESSING_ATTEMPTS || 3;
+  // Discovery only (ids); every decision and write happens per job under RLS below.
+  const { rows: candidates } = await pool.query(CANDIDATES_SQL, [lockTimeoutMinutes, limit]);
+  const jobs = [];
+  for (const candidate of candidates) {
+    // A failure rolls back only this job (atomic per job) and ends the sweep; the next sweep retries.
+    const job = await recoverOne(candidate, { lockTimeoutMinutes, maxAttempts });
+    if (job) jobs.push(job);
   }
 
   const summary = { requeued: 0, failed: 0, superseded: 0, jobs };

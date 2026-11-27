@@ -1,3 +1,5 @@
+// Must precede every module that loads src/db: selects WORKER_DATABASE_URL for this process.
+process.env.DOCUMIND_PROCESS_ROLE = 'worker';
 require('dotenv').config();
 const env = require('./config/env');
 const logger = require('./observability/logger');

@@ -23,8 +23,10 @@ x-backend-env: &backend-env
   PORT: "3000"
   TRUST_PROXY: "${TRUST_PROXY:-1}"
   SHUTDOWN_TIMEOUT_MS: "20000"
-  # Runtime role: NOSUPERUSER, RLS enforced via SET LOCAL ROLE documind_app (see migrations/007)
-  DATABASE_URL: "postgresql://documind_runtime:${DB_RUNTIME_PASSWORD:?DB_RUNTIME_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-documind}"
+  # API login: documind_api (migration 012) — NOSUPERUSER, NOBYPASSRLS, no direct privilege on
+  # tenant tables; tenant data only via SET LOCAL ROLE documind_app inside tenant transactions.
+  # The worker overrides this with its own login (see the worker service).
+  DATABASE_URL: "postgresql://documind_api:${DB_API_PASSWORD:?DB_API_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-documind}"
   DATABASE_POOL_MAX: "${DATABASE_POOL_MAX:-20}"
   REDIS_URL: "redis://:${REDIS_PASSWORD:?REDIS_PASSWORD is required}@redis:6379"
   JWT_ACCESS_SECRET: "${JWT_ACCESS_SECRET:?JWT_ACCESS_SECRET is required}"
@@ -233,7 +235,11 @@ services:
     environment:
       NODE_ENV: production
       MIGRATION_DATABASE_URL: "postgresql://${POSTGRES_USER:-documind_admin}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-documind}"
+      # documind_runtime is no longer used by api/worker; its password is still applied so an
+      # older image can be rolled back to. documind_api / documind_worker get theirs here.
       DB_RUNTIME_PASSWORD: "${DB_RUNTIME_PASSWORD:?DB_RUNTIME_PASSWORD is required}"
+      DB_API_PASSWORD: "${DB_API_PASSWORD:?DB_API_PASSWORD is required}"
+      DB_WORKER_PASSWORD: "${DB_WORKER_PASSWORD:?DB_WORKER_PASSWORD is required}"
     depends_on:
       postgres: { condition: service_healthy }
     networks: [data]
@@ -265,7 +271,13 @@ services:
     build: { context: ./backend, target: worker }
     image: documind-worker:${IMAGE_TAG:-latest}
     restart: unless-stopped
-    environment: *backend-env
+    environment:
+      <<: *backend-env
+      # Worker login: documind_worker (migrations 013/014) — NOBYPASSRLS, NOINHERIT; every job
+      # write runs in its tenant transaction. Both variables point at it, so the worker
+      # container never holds the API password.
+      DATABASE_URL: "postgresql://documind_worker:${DB_WORKER_PASSWORD:?DB_WORKER_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-documind}"
+      WORKER_DATABASE_URL: "postgresql://documind_worker:${DB_WORKER_PASSWORD:?DB_WORKER_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-documind}"
     depends_on:
       migrate:  { condition: service_completed_successfully }
       postgres: { condition: service_healthy }

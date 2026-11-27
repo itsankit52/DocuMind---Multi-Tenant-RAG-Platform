@@ -8,6 +8,8 @@ const env = require('../../src/config/env');
 const minioService = require('../../src/storage/minio.service');
 const documentService = require('../../src/documents/document.service');
 const docRepo = require('../../src/repositories/document.repository');
+const { buildZip, createTestDocx } = require('../fixtures/document.fixtures');
+const { extractDocxText } = require('../../src/processing/extractors/docx.extractor');
 
 describe('Step 5 — MinIO + Document Upload + Metadata + Isolation Tests', () => {
   let orgAId, orgBId;
@@ -23,10 +25,8 @@ describe('Step 5 — MinIO + Document Upload + Metadata + Isolation Tests', () =
   ]);
 
   // DOCX is a zip archive starting with PK\x03\x04
-  const validDocxBuffer = Buffer.concat([
-    Buffer.from([0x50, 0x4B, 0x03, 0x04, 0x14, 0x00, 0x06, 0x00]),
-    Buffer.from(' - Dummy Valid DOCX Content for DocuMind Test'),
-  ]);
+  // A real (minimal) OOXML package: the upload check reads the ZIP directory
+  const validDocxBuffer = createTestDocx(['Dummy Valid DOCX Content for DocuMind Test']);
 
   const requestWithAuth = (token, orgId) => {
     const req = supertest(app);
@@ -212,6 +212,26 @@ describe('Step 5 — MinIO + Document Upload + Metadata + Isolation Tests', () =
       expect(doc.filename).not.toContain('/');
       expect(doc.filename).not.toContain('\\');
       expect(doc.storage_key).toBe(`organizations/${orgAId}/documents/${doc.id}/original/${doc.filename}`);
+    });
+
+    test('the DOCX fixture is a real Word document (mammoth extracts its text)', async () => {
+      const { fullText } = await extractDocxText(validDocxBuffer);
+      expect(fullText).toContain('Dummy Valid DOCX Content');
+    });
+
+    test.each([
+      ['a bare "PK" header', Buffer.concat([Buffer.from([0x50, 0x4B, 0x03, 0x04]), Buffer.from('not a zip')])],
+      ['a renamed ZIP of other files', buildZip({ 'readme.txt': 'hello', 'data/x.json': '{}' })],
+      ['a spreadsheet package (.xlsx renamed)', buildZip({ '[Content_Types].xml': '<Types/>', 'xl/workbook.xml': '<workbook/>' })],
+      ['a truncated Word document', createTestDocx(['cut']).subarray(0, 120)],
+    ])('Upload rejects a .docx that is %s (400) and stores nothing', async (_label, buffer) => {
+      const before = (await pool.query('SELECT count(*)::int AS n FROM documents')).rows[0].n;
+      const res = await requestWithAuth(adminAToken, orgAId)
+        .post('/api/documents')
+        .attach('file', buffer, 'fake.docx');
+      expect(res.status).toBe(400);
+      expect(res.body.message).toBe('Invalid DOCX file content.');
+      expect((await pool.query('SELECT count(*)::int AS n FROM documents')).rows[0].n).toBe(before);
     });
   });
 

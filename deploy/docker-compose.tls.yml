@@ -1,0 +1,12 @@
+# HTTPS termination at Nginx. Use together with the production file:
+#   docker compose -f docker-compose.prod.yml -f deploy/docker-compose.tls.yml --env-file .env.production up -d
+# Provide real certificates (never commit them) in TLS_CERT_DIR:
+#   fullchain.pem  privkey.pem
+services:
+  nginx:
+    ports:
+      - "${NGINX_HTTPS_PORT:-443}:443"
+    volumes:
+      - ./deploy/nginx/tls/documind-tls.conf:/etc/nginx/conf.d/documind.conf:ro
+      - ${TLS_CERT_DIR:?TLS_CERT_DIR must point at a directory with fullchain.pem and privkey.pem}:/etc/nginx/certs:ro
+      - ${ACME_WEBROOT:-./deploy/nginx/acme}:/var/www/acme:ro

@@ -8,6 +8,8 @@ const orgRepo = require('../repositories/org.repository');
 const userRepo = require('../repositories/user.repository');
 const rateLimiter = require('../middleware/rate-limiter');
 const env = require('../config/env');
+const oauthRepo = require('../repositories/oauth.repository');
+const { setSessionCookies } = require('./session-cookies');
 
 const router = express.Router();
 
@@ -64,20 +66,7 @@ router.post('/login', authRateLimiter, async (req, res, next) => {
 
     const { email, password } = parseResult.data;
     const { user, tokens } = await authService.login(email, password);
-
-    res.cookie('accessToken', tokens.accessToken, {
-      httpOnly: true,
-      secure: env.NODE_ENV === 'production',
-      sameSite: 'Strict',
-      maxAge: 15 * 60 * 1000, // 15 mins
-    });
-
-    res.cookie('refreshToken', tokens.refreshToken, {
-      httpOnly: true,
-      secure: env.NODE_ENV === 'production',
-      sameSite: 'Strict',
-      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
-    });
+    setSessionCookies(res, tokens); // same session as Google sign-in (session-cookies.js)
 
     res.status(200).json({
       status: 'success',
@@ -146,6 +135,7 @@ router.post('/logout', (req, res) => {
 router.get('/me', authMiddleware, async (req, res, next) => {
   try {
     const orgs = await orgRepo.findMembershipsByUser(req.user.id);
+    const authMethods = await oauthRepo.getAuthMethods(req.user.id);
     res.status(200).json({
       status: 'success',
       data: {
@@ -154,8 +144,10 @@ router.get('/me', authMiddleware, async (req, res, next) => {
           email: req.user.email,
           fullName: req.user.full_name,
           status: req.user.status,
+          authMethods, // { password: boolean, google: boolean } — account page only
         },
         organizations: orgs,
+        googleSignInEnabled: env.GOOGLE_OAUTH_ENABLED,
       },
     });
   } catch (err) {

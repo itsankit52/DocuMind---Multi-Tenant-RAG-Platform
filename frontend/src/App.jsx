@@ -1,3 +1,4 @@
+import { lazy, Suspense } from 'react';
 import { BrowserRouter, Link, Route, Routes } from 'react-router-dom';
 import { AuthProvider } from './context/AuthContext';
 import { ProtectedRoute, PublicOnlyRoute, RequireRole } from './components/ProtectedRoute';
@@ -6,7 +7,14 @@ import { LoginPage, OnboardingPage, RegisterPage } from './pages/AuthPages';
 import { DashboardPage } from './pages/DashboardPage';
 import { DocumentsPage } from './pages/DocumentsPage';
 import { ChatPage } from './pages/ChatPage';
-import { MembersPage } from './pages/MembersPage';
+import { FullPageLoader, LazyLoadBoundary, Spinner } from './components/Feedback';
+
+// Loaded on demand: only invitees open /invite, and only admins reach /settings/members
+// (RequireRole renders before the chunk is requested, so other roles never download it).
+const InvitePage = lazy(() => import('./pages/InvitePage').then(m => ({ default: m.InvitePage })));
+const GoogleCompletePage = lazy(() => import('./pages/GoogleCompletePage').then(m => ({ default: m.GoogleCompletePage })));
+const AccountPage = lazy(() => import('./pages/AccountPage').then(m => ({ default: m.AccountPage })));
+const MembersPage = lazy(() => import('./pages/MembersPage').then(m => ({ default: m.MembersPage })));
 
 export function AppRoutes() {
   return (
@@ -15,8 +23,13 @@ export function AppRoutes() {
         <Route path="/login" element={<LoginPage />} />
         <Route path="/register" element={<RegisterPage />} />
       </Route>
+      {/* Public: works signed in or out, with or without an organization */}
+      <Route path="/invite" element={<LazyLoadBoundary><Suspense fallback={<FullPageLoader label="Loading invitation…" />}><InvitePage /></Suspense></LazyLoadBoundary>} />
+      {/* Google callback landing page: public (it loads the session the backend just set) */}
+      <Route path="/auth/google/complete" element={<LazyLoadBoundary><Suspense fallback={<FullPageLoader label="Completing Google sign-in…" />}><GoogleCompletePage /></Suspense></LazyLoadBoundary>} />
       <Route element={<ProtectedRoute requireOrganization={false} />}>
         <Route path="/onboarding" element={<OnboardingPage />} />
+        <Route path="/settings/account" element={<LazyLoadBoundary><Suspense fallback={<FullPageLoader label="Loading account…" />}><AccountPage /></Suspense></LazyLoadBoundary>} />
       </Route>
       <Route element={<ProtectedRoute />}>
         <Route element={<Layout />}>
@@ -25,7 +38,7 @@ export function AppRoutes() {
           <Route path="/chat" element={<ChatPage />} />
           <Route path="/chat/:conversationId" element={<ChatPage />} />
           <Route element={<RequireRole roles={['admin']} />}>
-            <Route path="/settings/members" element={<MembersPage />} />
+            <Route path="/settings/members" element={<LazyLoadBoundary><Suspense fallback={<Spinner label="Loading members…" />}><MembersPage /></Suspense></LazyLoadBoundary>} />
           </Route>
           <Route path="*" element={<NotFound />} />
         </Route>

@@ -401,30 +401,42 @@ describe('Step 6 — Document Processing Pipeline & Worker Tests', () => {
       expect(tenantAChunks.length).toBe(0);
     });
 
-    test('Worker ignores spoofed organizationId in queue message and enforces trusted database tenant', async () => {
+    // Phase 3.4 (approved): the message's organizationId selects the tenant transaction; RLS makes
+    // another organization's job invisible, so a spoofed, missing or malformed organizationId is
+    // "job not found" — dead-lettered, acknowledged, and nothing of either tenant is touched.
+    test.each([
+      ['spoofed (organization B)', () => orgBId],
+      ['missing', () => undefined],
+      ['malformed', () => 'not-a-uuid'],
+    ])('Worker dead-letters a %s organizationId as job not found and touches nothing', async (_label, orgOf) => {
       const uploadRes = await requestWithAuth(adminAToken, orgAId)
         .post('/api/documents')
         .attach('file', samplePdf, 'spoof-worker-test.pdf');
       const doc = uploadRes.body.data.document;
 
-      // Send payload with spoofed organizationId = orgBId
-      const spoofedPayload = {
-        event: 'document.process',
-        jobId: doc.job.id,
-        documentId: doc.id,
-        organizationId: orgBId, // Malicious spoof
-        version: 1,
-      };
+      const spoofedPayload = { event: 'document.process', jobId: doc.job.id, documentId: doc.id, version: 1 };
+      if (orgOf() !== undefined) spoofedPayload.organizationId = orgOf();
 
+      const dlqSpy = jest.spyOn(rabbitmqService, 'publishDeadLetter').mockResolvedValue(true);
       let acked = false;
       await processor.processJob(spoofedPayload, { ack: () => { acked = true; }, nack: () => {}, retry: () => {} });
       expect(acked).toBe(true);
+      expect(dlqSpy).toHaveBeenCalledWith(spoofedPayload, 'Job record not found in PostgreSQL');
+      dlqSpy.mockRestore(); // after the assertion: restoring clears the recorded calls
 
-      // Verify chunk belongs to Org A (authoritative), NOT Org B
-      const chunks = await pool.query('SELECT * FROM document_chunks WHERE document_id = $1', [doc.id]);
-      expect(chunks.rows.length).toBeGreaterThan(0);
-      expect(chunks.rows[0].organization_id).toBe(orgAId);
-      expect(chunks.rows[0].organization_id).not.toBe(orgBId);
+      // Neither tenant was touched: no chunks, the job was never claimed, the document never ran
+      const chunks = await pool.query('SELECT count(*)::int AS n FROM document_chunks WHERE document_id = $1', [doc.id]);
+      expect(chunks.rows[0].n).toBe(0);
+      const job = await pool.query('SELECT status, attempts, worker_id FROM document_processing_jobs WHERE id = $1', [doc.job.id]);
+      expect(job.rows[0]).toEqual({ status: 'queued', attempts: 0, worker_id: null });
+      const docRow = await pool.query('SELECT status FROM documents WHERE id = $1', [doc.id]);
+      expect(docRow.rows[0].status).not.toBe('processing');
+
+      // The same job with the CORRECT organization still processes normally afterwards
+      await processor.processJob({ ...spoofedPayload, organizationId: orgAId }, { ack: () => {}, nack: () => {}, retry: () => {} });
+      const after = await pool.query('SELECT organization_id FROM document_chunks WHERE document_id = $1', [doc.id]);
+      expect(after.rows.length).toBeGreaterThan(0);
+      expect(after.rows.every(r => r.organization_id === orgAId)).toBe(true);
     });
   });
 

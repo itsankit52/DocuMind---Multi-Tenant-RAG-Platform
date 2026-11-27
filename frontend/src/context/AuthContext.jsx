@@ -30,6 +30,7 @@ export function AuthProvider({ children }) {
   const [activeOrgId, setActiveOrgId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [sessionExpired, setSessionExpired] = useState(false);
+  const [googleSignInEnabled, setGoogleSignInEnabled] = useState(false);
   const mounted = useRef(true);
   // Whether a signed-in user was loaded. "Session expired" is only meaningful for a user who
   // had a session: an anonymous first visit also 401s on /auth/me (and on the refresh attempt).
@@ -57,6 +58,7 @@ export function AuthProvider({ children }) {
       hadUser.current = !!result?.user;
       setUser(result?.user || null);
       setOrganizations(orgs);
+      setGoogleSignInEnabled(result?.googleSignInEnabled === true);
       setSessionExpired(false);
       const preferred = readOrgPreference();
       const current = orgs.find(o => o.organization_id === preferred) || orgs[0] || null;
@@ -118,6 +120,16 @@ export function AuthProvider({ children }) {
     await refreshUser();
   }, [refreshUser]);
 
+  /**
+   * After an invitation was accepted: reload memberships from the backend and make the
+   * joined organization active (same convention as createOrganization). Other memberships
+   * are untouched; the organization is only selected if the backend lists it.
+   */
+  const joinOrganization = useCallback(async (organizationId) => {
+    writeOrgPreference(organizationId);
+    await refreshUser();
+  }, [refreshUser]);
+
   const activeOrganization = useMemo(
     () => organizations.find(o => o.organization_id === activeOrgId) || null,
     [organizations, activeOrgId],
@@ -131,14 +143,16 @@ export function AuthProvider({ children }) {
     isAuthenticated: !!user,
     loading,
     sessionExpired,
+    googleSignInEnabled,
     login,
     register,
     logout,
     refreshUser,
     selectOrganization,
     createOrganization,
-  }), [user, organizations, activeOrganization, loading, sessionExpired,
-    login, register, logout, refreshUser, selectOrganization, createOrganization]);
+    joinOrganization,
+  }), [user, organizations, activeOrganization, loading, sessionExpired, googleSignInEnabled,
+    login, register, logout, refreshUser, selectOrganization, createOrganization, joinOrganization]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

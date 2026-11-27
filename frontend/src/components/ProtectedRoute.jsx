@@ -33,10 +33,18 @@ export function RequireRole({ roles }) {
   return <Outlet />;
 }
 
-/** Login/register pages: signed-in users go straight to the app. */
+/**
+ * Login/register pages: signed-in users go straight to the app — or back to the in-app path
+ * they came from (e.g. /invite). Only same-app paths are honored.
+ */
 export function PublicOnlyRoute() {
   const { loading, isAuthenticated } = useAuth();
+  const location = useLocation();
   if (loading) return <FullPageLoader />;
-  if (isAuthenticated) return <Navigate to="/" replace />;
+  if (isAuthenticated) {
+    const from = location.state?.from;
+    const target = typeof from === 'string' && from.startsWith('/') && !from.startsWith('//') ? from : '/';
+    return <Navigate to={target} replace />;
+  }
   return <Outlet />;
 }

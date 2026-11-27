@@ -1,0 +1,47 @@
+# ── Dependencies and build output ────────────────────────────────────────────
+node_modules/
+dist/
+coverage/
+
+# ── Environment files (real values never committed) ──────────────────────────
+.env
+.env.*
+env.example
+# Templates stay trackable (root, backend/, frontend/). Placeholders only.
+!.env.example
+!.env.production.example
+
+# ── Database backups and dumps ───────────────────────────────────────────────
+backups/
+*.dump
+*.dump.sha256
+*.dump.partial
+
+# ── TLS certificates, private keys, ACME challenge webroot ───────────────────
+deploy/nginx/certs/
+deploy/nginx/acme/
+*.pem
+*.key
+*.p12
+*.pfx
+
+# ── Local e2e artifacts and scratch scripts (contain tokens / hard-coded ids) ─
+e2e_*
+backend/e2e_*
+backend/scratch/
+
+# ── Logs and smoke-test output ───────────────────────────────────────────────
+*.log
+logs/
+smoke-run*.txt
+
+# ── Local tooling, OS and OneDrive junk ──────────────────────────────────────
+.claude/
+Thumbs.db
+desktop.ini
+.DS_Store
+
+.github
+docs
+DATABASE_DESIGN.md
+.gitattributes

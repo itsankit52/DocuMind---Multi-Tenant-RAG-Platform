@@ -190,7 +190,8 @@ describe('C18 — retry delays vs the retry queue TTL (fake channels)', () => {
 describe('C18 — bounded retries for job-lookup database errors', () => {
   afterEach(() => jest.restoreAllMocks());
 
-  const payload = { jobId: '0190f7a2-0000-7000-8000-0000000000a1', documentId: '0190f7a2-0000-7000-8000-0000000000d1' };
+  // organizationId is required since Phase 3.4 (the lookup runs in that tenant's transaction)
+  const payload = { jobId: '0190f7a2-0000-7000-8000-0000000000a1', documentId: '0190f7a2-0000-7000-8000-0000000000d1', organizationId: '0190f7a2-0000-7000-8000-0000000000f1' };
 
   test('backs off, then dead-letters after JOB_LOOKUP_MAX_ATTEMPTS and acks', async () => {
     jest.spyOn(jobRepo, 'findById').mockRejectedValue(new Error('connect ECONNREFUSED 127.0.0.1:5433'));

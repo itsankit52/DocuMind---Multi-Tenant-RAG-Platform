@@ -52,7 +52,10 @@ class AuthService {
       throw new AppError('Invalid credentials', 401);
     }
 
-    const isValid = await this.verifyPassword(user.password_hash, password);
+    // Google-only accounts have no password (migration 009): same answer and timing as a wrong password
+    const isValid = user.password_hash
+      ? await this.verifyPassword(user.password_hash, password)
+      : await this.verifyPassword(await dummyHash(), password).then(() => false, () => false);
     if (!isValid || user.status !== 'active') {
       throw new AppError('Invalid credentials', 401);
     }
@@ -63,5 +66,17 @@ class AuthService {
     };
   }
 }
+
+/**
+ * Re-check the signed-in user's password before a sensitive change (linking Google).
+ * Accounts without a password cannot use this (they already sign in with Google).
+ */
+AuthService.prototype.verifyCurrentPassword = async function verifyCurrentPassword(userId, password) {
+  const hash = await userRepo.findPasswordHash(userId);
+  const ok = hash
+    ? await this.verifyPassword(hash, password).catch(() => false)
+    : await this.verifyPassword(await dummyHash(), password).then(() => false, () => false);
+  if (!ok) throw new AppError('Incorrect password.', 401);
+};
 
 module.exports = new AuthService();

@@ -42,4 +42,5 @@ async function tenantMiddleware(req, res, next) {
 }
 
 module.exports = tenantMiddleware;
+module.exports.UUID_RE = UUID_RE;
 

@@ -1,7 +1,15 @@
 class AppError extends Error {
-  constructor(message, statusCode) {
+  /**
+   * @param {string} message      client-safe message
+   * @param {number} statusCode   HTTP status
+   * @param {string} [errorCode]  optional stable machine-readable code (e.g. ALREADY_ORGANIZATION_MEMBER),
+   *                              returned to clients as `code`. Kept separate from `code`, which
+   *                              holds PostgreSQL SQLSTATEs on driver errors.
+   */
+  constructor(message, statusCode, errorCode) {
     super(message);
     this.statusCode = statusCode;
+    if (errorCode) this.errorCode = errorCode;
     this.status = `${statusCode}`.startsWith('4') ? 'fail' : 'error';
     this.isOperational = true;
 

@@ -11,6 +11,7 @@ All endpoints are prefixed with `/api`. All requests and responses use `applicat
 - [Authentication](#authentication)
 - [Common Conventions](#common-conventions)
 - [Auth Endpoints](#auth-endpoints)
+- [Google Sign-in](#google-sign-in)
 - [Organization Endpoints](#organization-endpoints)
 - [Document Endpoints](#document-endpoints)
 - [RAG Query Endpoint](#rag-query-endpoint)
@@ -191,10 +192,33 @@ Return the currently authenticated user's profile.
 {
   "status": "success",
   "data": {
-    "user": { "id": "uuid", "email": "...", "fullName": "..." }
+    "user": {
+      "id": "uuid", "email": "...", "fullName": "...", "status": "active",
+      "authMethods": { "password": true, "google": false }
+    },
+    "organizations": [],
+    "googleSignInEnabled": true
   }
 }
 ```
+
+---
+
+## Google Sign-in
+
+Browser redirects, not XHR. Setup: `docs/DEPLOYMENT.md` § Google sign-in.
+
+| Route | Description |
+|---|---|
+| `GET /api/auth/google` | Starts sign-in/sign-up: creates one-time state (Redis, 10 min), nonce and PKCE verifier, sets the HttpOnly `documind_oauth_binding` cookie, `302` to Google |
+| `GET /api/auth/google/callback` | Google's redirect target. Verifies state + binding cookie (one-time), exchanges the code, verifies the ID token (signature, issuer, audience, expiry, nonce, `email_verified`). On success sets the normal `accessToken`/`refreshToken` cookies. Always `302` to `APP_BASE_URL/auth/google/complete?status=signed_in\|signed_up\|linked` or `?error=<code>` |
+| `POST /api/auth/google/link` | Auth required. Body `{ "password": "..." }` (current password). `200 { url }` to send the browser to Google for linking; `401` wrong password; `409` already linked; `503` not configured |
+
+Error codes: `not_configured`, `unavailable`, `cancelled`, `google_error`, `invalid_request`,
+`invalid_state`, `expired_state`, `code_exchange_failed`, `id_token_invalid`, `email_missing`,
+`email_unverified`, `account_exists` (email belongs to a password account — sign in and link),
+`account_conflict`, `account_disabled`, `email_mismatch`, `google_account_in_use`,
+`already_linked`, `server_error`. Rate limit: 30 requests / 15 min / IP across these routes.
 
 ---
 
