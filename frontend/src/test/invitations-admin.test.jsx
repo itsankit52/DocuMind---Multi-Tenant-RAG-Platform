@@ -19,11 +19,11 @@ const page = (invitations, { page: p = 1, totalCount = invitations.length, total
 
 const panel = () => within(screen.getByRole('region', { name: 'Invitations' }));
 async function openMembers() {
-  renderApp('/settings/members');
+  renderApp('/settings/invitations');
   await screen.findByRole('heading', { name: 'Invitations' });
 }
 async function openInviteDialog(user) {
-  await user.click(panel().getByRole('button', { name: 'Invite member' }));
+  await user.click(panel().getByRole('button', { name: 'Send invitation' }));
   return within(screen.getByRole('dialog', { name: 'Invite member' }));
 }
 
@@ -182,7 +182,7 @@ describe('Invitations panel (admin)', () => {
     expect(screen.getByRole('dialog', { name: 'Invite member' })).toHaveAttribute('aria-modal', 'true');
     await user.keyboard('{Escape}');
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
-    expect(panel().getByRole('button', { name: 'Invite member' })).toHaveFocus();
+    expect(panel().getByRole('button', { name: 'Send invitation' })).toHaveFocus();
   });
 
   it('resend shows the new link and explains the old one stopped working', async () => {
@@ -221,9 +221,9 @@ describe('Invitations panel (admin)', () => {
   it.each(['member', 'viewer'])('%s never sees invitation controls or calls the invitation API', async (role) => {
     resetApiMocks();
     mockSignedIn({ role });
-    renderApp('/settings/members');
+    renderApp('/settings/invitations');
     expect(await screen.findByRole('heading', { name: 'Not available' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Invite member' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Send invitation' })).not.toBeInTheDocument();
     expect(invitationApi.list).not.toHaveBeenCalled();
   });
 });

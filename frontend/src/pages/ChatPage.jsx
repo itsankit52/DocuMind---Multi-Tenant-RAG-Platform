@@ -8,6 +8,7 @@ import { MessageContent } from '../components/MessageContent';
 import { CitationList } from '../components/CitationList';
 import { Alert, EmptyState, Spinner } from '../components/Feedback';
 import { formatTime } from '../utils/format';
+import { Icon, LogoMark } from '../components/Icon';
 
 const MAX_QUESTION_LENGTH = Number(import.meta.env.VITE_MAX_QUESTION_LENGTH) || 1000;
 
@@ -131,7 +132,7 @@ function MessageList({ chat, hasConversation }) {
   return (
     <div className="message-list" ref={listRef} onScroll={onScroll} aria-busy={chat.streaming}>
       {chat.messages.length === 0 ? (
-        <EmptyState title={hasConversation ? 'No messages yet' : 'Ask a question about your documents'}>
+        <EmptyState icon="messageSquare" title={hasConversation ? 'No messages yet' : 'Ask a question about your documents'}>
           Answers are grounded in your organization's documents and include their sources.
         </EmptyState>
       ) : chat.messages.map(m => <Message key={m.id} message={m} onRetry={() => chat.retry(m.id)} canRetry={!chat.streaming} />)}
@@ -170,12 +171,18 @@ function Message({ message, onRetry, canRetry }) {
   return (
     <article className={`message ${isUser ? 'message-user' : 'message-assistant'}`} data-status={message.status}
       aria-label={isUser ? 'Your message' : 'Assistant message'}>
+      {!isUser && (
+        <span className="message-author" aria-hidden="true">
+          <LogoMark size={20} /> DocuAI
+          {message.status === 'streaming' && <span className="muted font-normal">Preparing your answer…</span>}
+        </span>
+      )}
       <div className="message-bubble">
         {isUser
           ? <p className="message-text">{message.content}</p>
           : message.content
             ? <MessageContent text={message.content} />
-            : message.status === 'streaming' && <Spinner inline label="Generating answer…" />}
+            : message.status === 'streaming' && <Spinner inline label="Preparing your answer…" />}
         {message.status === 'streaming' && message.content && <span className="cursor" aria-hidden="true">▍</span>}
         {!isUser && message.status === 'complete' && <CitationList citations={message.citations} />}
       </div>
@@ -221,12 +228,13 @@ function Composer({ onSend, onStop, streaming, disabled }) {
 
   return (
     <form className="composer" onSubmit={(e) => { e.preventDefault(); submit(); }}>
+      <div className="composer-box">
       <label htmlFor="composer-input" className="visually-hidden">Ask a question</label>
       <textarea
         id="composer-input"
         className="input composer-input"
-        rows={2}
-        placeholder="Ask a question about your documents… (Enter to send, Shift+Enter for a new line)"
+        rows={1}
+        placeholder="Ask a question about your documents…"
         value={text}
         onChange={e => setText(e.target.value)}
         onKeyDown={onKeyDown}
@@ -236,12 +244,13 @@ function Composer({ onSend, onStop, streaming, disabled }) {
       <div className="composer-actions">
         {tooLong && <span className="small text-danger">{text.length}/{MAX_QUESTION_LENGTH}</span>}
         {streaming ? (
-          <button type="button" className="btn btn-secondary" onClick={onStop}>Stop generating</button>
+          <button type="button" className="btn btn-secondary" onClick={onStop}><Icon name="square" size={13} /> Stop generating</button>
         ) : (
           <button type="submit" className="btn btn-primary" disabled={blocked}>
             {sending ? 'Sending…' : 'Send'}
           </button>
         )}
+      </div>
       </div>
     </form>
   );

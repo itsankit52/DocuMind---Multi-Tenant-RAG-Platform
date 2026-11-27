@@ -7,14 +7,18 @@ import { LoginPage, OnboardingPage, RegisterPage } from './pages/AuthPages';
 import { DashboardPage } from './pages/DashboardPage';
 import { DocumentsPage } from './pages/DocumentsPage';
 import { ChatPage } from './pages/ChatPage';
-import { FullPageLoader, LazyLoadBoundary, Spinner } from './components/Feedback';
+import { EmptyState, FullPageLoader, LazyLoadBoundary, Spinner } from './components/Feedback';
 
 // Loaded on demand: only invitees open /invite, and only admins reach /settings/members
 // (RequireRole renders before the chunk is requested, so other roles never download it).
 const InvitePage = lazy(() => import('./pages/InvitePage').then(m => ({ default: m.InvitePage })));
 const GoogleCompletePage = lazy(() => import('./pages/GoogleCompletePage').then(m => ({ default: m.GoogleCompletePage })));
 const AccountPage = lazy(() => import('./pages/AccountPage').then(m => ({ default: m.AccountPage })));
+const LandingPage = lazy(() => import('./pages/LandingPage').then(m => ({ default: m.LandingPage })));
 const MembersPage = lazy(() => import('./pages/MembersPage').then(m => ({ default: m.MembersPage })));
+const InvitationsPage = lazy(() => import('./pages/InvitationsPage').then(m => ({ default: m.InvitationsPage })));
+const DocumentDetailsPage = lazy(() => import('./pages/DocumentDetailsPage').then(m => ({ default: m.DocumentDetailsPage })));
+const SettingsPage = lazy(() => import('./pages/SettingsPage').then(m => ({ default: m.SettingsPage })));
 
 export function AppRoutes() {
   return (
@@ -31,14 +35,18 @@ export function AppRoutes() {
         <Route path="/onboarding" element={<OnboardingPage />} />
         <Route path="/settings/account" element={<LazyLoadBoundary><Suspense fallback={<FullPageLoader label="Loading account…" />}><AccountPage /></Suspense></LazyLoadBoundary>} />
       </Route>
-      <Route element={<ProtectedRoute />}>
+      {/* "/": landing page when signed out, dashboard when signed in */}
+      <Route element={<ProtectedRoute signedOutHome={<LazyLoadBoundary><Suspense fallback={<FullPageLoader />}><LandingPage /></Suspense></LazyLoadBoundary>} />}>
         <Route element={<Layout />}>
           <Route index element={<DashboardPage />} />
           <Route path="/documents" element={<DocumentsPage />} />
+          <Route path="/documents/:documentId" element={<LazyLoadBoundary><Suspense fallback={<Spinner label="Loading document…" />}><DocumentDetailsPage /></Suspense></LazyLoadBoundary>} />
+          <Route path="/settings" element={<LazyLoadBoundary><Suspense fallback={<Spinner label="Loading settings…" />}><SettingsPage /></Suspense></LazyLoadBoundary>} />
           <Route path="/chat" element={<ChatPage />} />
           <Route path="/chat/:conversationId" element={<ChatPage />} />
           <Route element={<RequireRole roles={['admin']} />}>
             <Route path="/settings/members" element={<LazyLoadBoundary><Suspense fallback={<Spinner label="Loading members…" />}><MembersPage /></Suspense></LazyLoadBoundary>} />
+            <Route path="/settings/invitations" element={<LazyLoadBoundary><Suspense fallback={<Spinner label="Loading invitations…" />}><InvitationsPage /></Suspense></LazyLoadBoundary>} />
           </Route>
           <Route path="*" element={<NotFound />} />
         </Route>
@@ -50,8 +58,9 @@ export function AppRoutes() {
 function NotFound() {
   return (
     <div className="page">
-      <h1>Page not found</h1>
-      <p><Link to="/">Go to the dashboard</Link></p>
+      <EmptyState icon="search" title="Page not found">
+        The page you’re looking for doesn’t exist. <Link to="/">Go to the dashboard</Link>
+      </EmptyState>
     </div>
   );
 }

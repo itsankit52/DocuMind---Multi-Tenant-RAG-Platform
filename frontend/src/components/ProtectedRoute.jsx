@@ -5,13 +5,18 @@ import { FullPageLoader } from './Feedback';
 /**
  * Renders children only after the session is resolved.
  * requireOrganization: users without an active membership go to onboarding.
+ * signedOutHome: rendered instead of the login redirect for signed-out visitors at "/"
+ * (the public landing page); every other protected path still redirects to /login.
  */
-export function ProtectedRoute({ requireOrganization = true }) {
+export function ProtectedRoute({ requireOrganization = true, signedOutHome = null }) {
   const { loading, isAuthenticated, activeOrganization } = useAuth();
   const location = useLocation();
 
   if (loading) return <FullPageLoader />;
-  if (!isAuthenticated) return <Navigate to="/login" replace state={{ from: location.pathname }} />;
+  if (!isAuthenticated) {
+    if (signedOutHome && location.pathname === '/') return signedOutHome;
+    return <Navigate to="/login" replace state={{ from: location.pathname }} />;
+  }
   if (requireOrganization && !activeOrganization) return <Navigate to="/onboarding" replace />;
   return <Outlet />;
 }

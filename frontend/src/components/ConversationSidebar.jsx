@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Alert, EmptyState, Spinner } from './Feedback';
 import { formatDateTime } from '../utils/format';
+import { Icon } from './Icon';
 
 export function ConversationSidebar({
   conversations, loading, error, activeId, onCreate, onRename, onDelete, onReload, creating,
@@ -12,12 +13,12 @@ export function ConversationSidebar({
       <div className="conv-sidebar-header">
         <h2>Conversations</h2>
         <button type="button" className="btn btn-primary btn-sm" onClick={onCreate} disabled={creating}>
-          {creating ? 'Creating…' : 'New'}
+          {creating ? 'Creating…' : <><Icon name="plus" size={14} /> New</>}
         </button>
       </div>
       {error && <Alert error={error} onRetry={onReload} />}
       {loading ? <Spinner label="Loading conversations…" /> : conversations.length === 0 && !error ? (
-        <EmptyState title="No conversations yet">Start one to ask questions about your documents.</EmptyState>
+        <EmptyState icon="messageSquare" title="No conversations yet">Start one to ask questions about your documents.</EmptyState>
       ) : (
         <ul className="conv-list">
           {conversations.map(c => (

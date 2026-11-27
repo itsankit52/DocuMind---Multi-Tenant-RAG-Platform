@@ -1,5 +1,6 @@
 /**
- * Organization settings → Members (admin only in the UI; enforced by the backend).
+ * Organization → Members (admin only in the UI; enforced by the backend). Invitations live on
+ * their own page (/settings/invitations).
  *
  * Uses the existing endpoints:
  *   GET  /api/organizations/:id/members          list active members
@@ -11,9 +12,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { organizationApi } from '../api/endpoints';
 import { ROLE_LABELS, ROLES, useAuth } from '../context/AuthContext';
-import { Alert, EmptyState, Spinner } from '../components/Feedback';
+import { Alert, EmptyState, PageHeader, SkeletonRows } from '../components/Feedback';
+import { Icon } from '../components/Icon';
+import { initials } from '../components/Layout';
+import { Link } from 'react-router-dom';
 import { formatDateTime } from '../utils/format';
-import { InvitationsPanel } from '../components/InvitationsPanel';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -105,22 +108,22 @@ export function MembersPage() {
 
   return (
     <div className="page">
-      <header className="page-header">
-        <div>
-          <h1>Members</h1>
-          <p className="muted">{activeOrganization?.name} · manage who can access this organization and what they can do</p>
-        </div>
-      </header>
-
-      <InvitationsPanel orgId={orgId} />
-
+      <PageHeader
+        title="Members"
+        description={`${members.length || ''} ${members.length === 1 ? 'person has' : 'people have'} access to ${activeOrganization?.name || 'this organization'}`.trim()}
+        actions={(
+          <Link to="/settings/invitations" state={{ invite: true }} className="btn btn-primary">
+            <Icon name="mail" /> Invite member
+          </Link>
+        )}
+      />
       <AddMemberForm orgId={orgId} onAdded={async (msg) => { await load(); setNotice(msg); }} />
 
       {notice && <Alert tone="success" message={notice} onDismiss={() => setNotice(null)} />}
       {error && <Alert error={error} onDismiss={() => setError(null)} />}
 
-      {loading ? <Spinner label="Loading members…" /> : members.length === 0 ? (
-        <EmptyState title="No members found" />
+      {loading ? <div className="card"><SkeletonRows label="Loading members…" /></div> : members.length === 0 ? (
+        <div className="card"><EmptyState icon="users" title="No members found" /></div>
       ) : (
         <div className="table-wrap">
           <table className="table">
@@ -130,8 +133,7 @@ export function MembersPage() {
                 <th scope="col">Name</th>
                 <th scope="col">Email</th>
                 <th scope="col">Role</th>
-                <th scope="col">Status</th>
-                <th scope="col">Member since</th>
+                <th scope="col" className="hide-sm">Joined</th>
                 <th scope="col"><span className="visually-hidden">Actions</span></th>
               </tr>
             </thead>
@@ -141,8 +143,13 @@ export function MembersPage() {
                 const isSelf = m.id === user?.id;
                 return (
                   <tr key={m.id}>
-                    <td>{m.full_name || '—'}{isSelf && <span className="muted small"> (you)</span>}</td>
-                    <td>{m.email}</td>
+                    <td>
+                      <span className="inline-flex items-center gap-2.5">
+                        <span className="avatar" aria-hidden="true">{initials(m.full_name || m.email)}</span>
+                        <span className="font-medium">{m.full_name || '—'}{isSelf && <span className="muted small font-normal"> (you)</span>}</span>
+                      </span>
+                    </td>
+                    <td className="muted">{m.email}</td>
                     <td>
                       <label className="visually-hidden" htmlFor={`role-${m.id}`}>Role for {m.email}</label>
                       <select id={`role-${m.id}`} className="input input-sm role-select" value={m.role}
@@ -154,10 +161,9 @@ export function MembersPage() {
                       </select>
                       {lastAdmin && <span id={`last-admin-${m.id}`} className="muted small"> Last admin</span>}
                     </td>
-                    <td><span className={`badge ${m.status === 'active' ? 'badge-success' : 'badge-neutral'}`}>{m.status}</span></td>
-                    <td>{formatDateTime(m.created_at)}</td>
-                    <td>
-                      <button type="button" className="btn btn-sm btn-danger-text"
+                    <td className="hide-sm">{formatDateTime(m.created_at)}</td>
+                    <td className="cell-actions">
+                      <button type="button" className="btn btn-secondary btn-sm btn-danger-text"
                         disabled={savingId === m.id || lastAdmin}
                         title={lastAdmin ? 'The last admin cannot be removed' : undefined}
                         aria-label={`Remove ${m.email}`} onClick={() => removeMember(m)}>
@@ -173,7 +179,7 @@ export function MembersPage() {
       )}
 
       <section className="card role-help" aria-label="What each role can do">
-        <h2>Roles</h2>
+        <h2 className="mt-0">Roles</h2>
         <ul>
           <li><strong>Admin</strong> — everything a member can do, plus managing members, roles and invitations.</li>
           <li><strong>Member</strong> — upload, rename and delete documents; ask questions; manage conversations.</li>
@@ -209,8 +215,8 @@ function AddMemberForm({ orgId, onAdded }) {
 
   return (
     <form className="card add-member" onSubmit={onSubmit} aria-label="Add member" noValidate>
-      <p className="field-label">Add a member</p>
-      <p className="muted small">The person must already have a DocuMind account.</p>
+      <p className="field-label">Add an existing user</p>
+      <p className="muted small">Add someone who already has a DocuMind account. To invite someone new, send an invitation.</p>
       <div className="upload-row">
         <label className="visually-hidden" htmlFor="member-email">Email</label>
         <input id="member-email" className="input" type="email" placeholder="name@company.com"

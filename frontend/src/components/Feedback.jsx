@@ -2,6 +2,7 @@
 
 import { Component } from 'react';
 import { documentStatus } from '../utils/format';
+import { Icon } from './Icon';
 
 /**
  * Catches a failed lazy-route chunk download (offline, or a deploy replaced the old chunks)
@@ -61,9 +62,10 @@ export function Alert({ error, message, tone = 'danger', onRetry, onDismiss }) {
   );
 }
 
-export function EmptyState({ title, children }) {
+export function EmptyState({ title, icon, children }) {
   return (
     <div className="empty-state">
+      {icon && <span className="empty-icon"><Icon name={icon} size={18} /></span>}
       <p className="empty-title">{title}</p>
       {children && <div className="empty-body">{children}</div>}
     </div>
@@ -73,4 +75,28 @@ export function EmptyState({ title, children }) {
 export function StatusBadge({ status }) {
   const { label, tone } = documentStatus(status);
   return <span className={`badge badge-${tone}`} data-testid="doc-status">{label}</span>;
+}
+
+/** Page title, optional description and right-aligned actions. */
+export function PageHeader({ title, description, actions }) {
+  return (
+    <header className="page-header">
+      <div className="min-w-0">
+        <h1>{title}</h1>
+        {description && <p>{description}</p>}
+      </div>
+      {actions && <div className="page-actions">{actions}</div>}
+    </header>
+  );
+}
+
+/** Placeholder rows while a list loads (announced as one status). */
+export function SkeletonRows({ rows = 4, label = 'Loading…' }) {
+  return (
+    <div role="status" aria-label={label} className="flex flex-col gap-3 py-2">
+      {Array.from({ length: rows }, (_, i) => (
+        <span key={i} className="skeleton h-4" style={{ width: `${88 - (i % 3) * 14}%` }} aria-hidden="true" />
+      ))}
+    </div>
+  );
 }

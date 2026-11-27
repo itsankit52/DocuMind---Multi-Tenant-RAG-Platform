@@ -1,70 +1,146 @@
-import { useRef, useState } from 'react';
+import { useMemo, useState } from 'react';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { canWrite, useAuth } from '../context/AuthContext';
-import { downloadDocument, useDocuments } from '../hooks/useDocuments';
-import { Alert, EmptyState, Spinner, StatusBadge } from '../components/Feedback';
-import {
-  ACCEPTED_UPLOAD_EXTENSIONS, checkUploadFile, fileTypeLabel, formatBytes, formatDateTime, isDocumentPending,
-} from '../utils/format';
+import { useDocuments } from '../hooks/useDocuments';
+import { Alert, EmptyState, PageHeader, SkeletonRows, StatusBadge } from '../components/Feedback';
+import { Icon } from '../components/Icon';
+import { DocumentActions, RenameForm, UploadDialog, useUploaderNames } from '../components/DocumentParts';
+import { fileTypeLabel, formatBytes, formatDateTime, isDocumentPending } from '../utils/format';
+
+const TYPE_FILTERS = [['', 'All types'], ['PDF', 'PDF'], ['DOCX', 'DOCX']];
+const STATUS_FILTERS = [['', 'All statuses'], ['ready', 'Ready'], ['pending', 'Processing'], ['failed', 'Failed']];
+const SORTS = {
+  newest: ['Newest first', null], // server order (created_at DESC)
+  oldest: ['Oldest first', (a, b) => new Date(a.created_at) - new Date(b.created_at)],
+  name: ['Name A–Z', (a, b) => (a.filename || '').localeCompare(b.filename || '')],
+  size: ['Largest first', (a, b) => (Number(b.file_size) || 0) - (Number(a.file_size) || 0)],
+};
 
 export function DocumentsPage() {
-  const { activeOrganization, role } = useAuth();
-  const docs = useDocuments(activeOrganization?.organization_id);
+  const { activeOrganization, role, user } = useAuth();
+  const orgId = activeOrganization?.organization_id;
+  const docs = useDocuments(orgId);
   const writable = canWrite(role);
+  const uploaderName = useUploaderNames(orgId, role, user?.id);
+  const location = useLocation();
+  const navigate = useNavigate();
+  const [uploadOpen, setUploadOpen] = useState(() => !!location.state?.openUpload && writable);
   const [notice, setNotice] = useState(null);
   const [actionError, setActionError] = useState(null);
+  const [query, setQuery] = useState('');
+  const [type, setType] = useState('');
+  const [status, setStatus] = useState('');
+  const [sort, setSort] = useState('newest');
 
   const pendingCount = docs.documents.filter(d => isDocumentPending(d.status)).length;
+  const filtering = !!(query.trim() || type || status);
+
+  // Filters run over the loaded pages (the list API has no search/filter parameters)
+  const visible = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    const list = docs.documents.filter(d => (
+      (!q || `${d.filename || ''} ${d.original_name || ''}`.toLowerCase().includes(q))
+      && (!type || fileTypeLabel(d.mime_type) === type)
+      && (!status || (status === 'pending' ? isDocumentPending(d.status) : d.status === status))
+    ));
+    const cmp = SORTS[sort][1];
+    return cmp ? [...list].sort(cmp) : list;
+  }, [docs.documents, query, type, status, sort]);
+
+  const closeUpload = () => {
+    setUploadOpen(false);
+    if (location.state?.openUpload) navigate(location.pathname, { replace: true, state: null });
+  };
 
   return (
     <div className="page">
-      <header className="page-header">
-        <div>
-          <h1>Documents</h1>
-          <p className="muted">
+      <PageHeader
+        title="Documents"
+        description={(
+          <>
             {docs.totalCount} document{docs.totalCount === 1 ? '' : 's'}
             {pendingCount > 0 && ` · ${pendingCount} processing (updates automatically)`}
-          </p>
-        </div>
-        <button type="button" className="btn btn-secondary" onClick={() => docs.reload()} disabled={docs.loading}>
-          Refresh
-        </button>
-      </header>
+          </>
+        )}
+        actions={(
+          <>
+            <button type="button" className="btn btn-secondary" onClick={() => docs.reload()} disabled={docs.loading}>
+              <Icon name="refresh" /> Refresh
+            </button>
+            {writable && (
+              <button type="button" className="btn btn-primary" onClick={() => setUploadOpen(true)}>
+                <Icon name="upload" /> Upload document
+              </button>
+            )}
+          </>
+        )}
+      />
 
-      {writable
-        ? <UploadPanel onUpload={docs.upload} onUploaded={(d) => setNotice(`Uploaded ${d?.original_name || 'document'}. Processing has started.`)} />
-        : <Alert tone="info" message="You have read-only access in this organization." />}
-
+      {!writable && <Alert tone="info" message="You have read-only access in this organization." />}
       {notice && <Alert tone="success" message={notice} onDismiss={() => setNotice(null)} />}
       {actionError && <Alert error={actionError} onDismiss={() => setActionError(null)} />}
       {docs.error && <Alert error={docs.error} onRetry={() => docs.reload()} />}
 
-      {docs.loading && docs.documents.length === 0 ? <Spinner label="Loading documents…" /> : (
+      {docs.documents.length > 0 && (
+        <div className="toolbar" role="search" aria-label="Filter documents">
+          <span className="search-input">
+            <Icon name="search" />
+            <label className="visually-hidden" htmlFor="doc-search">Search documents</label>
+            <input id="doc-search" className="input" type="search" placeholder="Search by name"
+              value={query} onChange={e => setQuery(e.target.value)} />
+          </span>
+          <Select id="doc-type" label="File type" value={type} onChange={setType} options={TYPE_FILTERS} />
+          <Select id="doc-status" label="Processing status" value={status} onChange={setStatus} options={STATUS_FILTERS} />
+          <Select id="doc-sort" label="Sort" value={sort} onChange={setSort}
+            options={Object.entries(SORTS).map(([k, [l]]) => [k, l])} />
+          {filtering && (
+            <span className="toolbar-note" role="status">
+              {visible.length} of {docs.documents.length}{docs.hasMore ? ' loaded' : ''} shown
+            </span>
+          )}
+        </div>
+      )}
+
+      {docs.loading && docs.documents.length === 0 ? <div className="card"><SkeletonRows rows={5} label="Loading documents…" /></div> : (
         docs.documents.length === 0 && !docs.error ? (
-          <EmptyState title="No documents yet">Upload a PDF or DOCX file to start asking questions about it.</EmptyState>
+          <div className="card">
+            <EmptyState icon="fileText" title="No documents yet">
+              Upload a PDF or DOCX file to start asking questions about it.
+              {writable && (
+                <div><button type="button" className="btn btn-primary" onClick={() => setUploadOpen(true)}>
+                  <Icon name="upload" /> Upload document
+                </button></div>
+              )}
+            </EmptyState>
+          </div>
         ) : (
           <div className="table-wrap">
             <table className="table">
               <caption className="visually-hidden">Documents</caption>
               <thead>
                 <tr>
-                  <th scope="col">Name</th>
-                  <th scope="col">Type</th>
-                  <th scope="col">Size</th>
-                  <th scope="col">Status</th>
-                  <th scope="col">Uploaded</th>
-                  <th scope="col">Updated</th>
+                  <th scope="col">Document name</th>
+                  <th scope="col" className="hide-sm">File type</th>
+                  <th scope="col" className="hide-sm">Size</th>
+                  <th scope="col" className="hide-md">Uploaded by</th>
+                  <th scope="col" className="hide-md">Upload date</th>
+                  <th scope="col">Processing status</th>
                   <th scope="col"><span className="visually-hidden">Actions</span></th>
                 </tr>
               </thead>
               <tbody>
-                {docs.documents.map(doc => (
-                  <DocumentRow key={doc.id} doc={doc} writable={writable} docs={docs} onError={setActionError} />
+                {visible.map(doc => (
+                  <DocumentRow key={doc.id} doc={doc} writable={writable} docs={docs}
+                    uploader={uploaderName(doc.uploaded_by)} onError={setActionError} />
                 ))}
+                {visible.length === 0 && (
+                  <tr><td colSpan={7}><EmptyState icon="search" title="No matching documents">Try a different search or filter.</EmptyState></td></tr>
+                )}
               </tbody>
             </table>
             {docs.hasMore && (
               <div className="load-more">
-                <button type="button" className="btn btn-secondary" onClick={() => docs.loadMore()}
+                <button type="button" className="btn btn-secondary btn-sm" onClick={() => docs.loadMore()}
                   disabled={docs.loadingMore || docs.loading}>
                   {docs.loadingMore ? 'Loading…' : `Load more (${docs.documents.length} of ${docs.totalCount} shown)`}
                 </button>
@@ -73,131 +149,56 @@ export function DocumentsPage() {
           </div>
         )
       )}
+
+      {uploadOpen && (
+        <UploadDialog
+          onUpload={docs.upload}
+          onClose={closeUpload}
+          onUploaded={(d) => { closeUpload(); setNotice(`Uploaded ${d?.original_name || 'document'}. Processing has started.`); }}
+        />
+      )}
     </div>
   );
 }
 
-function UploadPanel({ onUpload, onUploaded }) {
-  const inputRef = useRef(null);
-  const [file, setFile] = useState(null);
-  const [progress, setProgress] = useState(null);
-  const [error, setError] = useState(null);
-  const uploading = progress !== null;
-
-  const onChoose = (e) => {
-    const f = e.target.files?.[0] || null;
-    setFile(f);
-    const problem = f ? checkUploadFile(f) : null;
-    setError(problem ? { message: problem } : null);
-  };
-
-  const onSubmit = async (e) => {
-    e.preventDefault();
-    if (uploading) return;
-    const problem = checkUploadFile(file);
-    if (problem) return setError({ message: problem });
-    setError(null);
-    setProgress(0);
-    try {
-      const doc = await onUpload(file, setProgress);
-      setFile(null);
-      if (inputRef.current) inputRef.current.value = '';
-      onUploaded(doc);
-    } catch (err) {
-      setError(err);
-    } finally {
-      setProgress(null);
-    }
-  };
-
+function Select({ id, label, value, onChange, options }) {
   return (
-    <form className="card upload-panel" onSubmit={onSubmit} aria-label="Upload document">
-      <label className="field-label" htmlFor="upload-input">Upload a document (PDF or DOCX)</label>
-      <div className="upload-row">
-        <input ref={inputRef} id="upload-input" type="file" accept={ACCEPTED_UPLOAD_EXTENSIONS}
-          onChange={onChoose} disabled={uploading} className="input" />
-        <button type="submit" className="btn btn-primary" disabled={!file || uploading || !!checkUploadFile(file)}>
-          {uploading ? 'Uploading…' : 'Upload'}
-        </button>
-      </div>
-      {uploading && (
-        <div className="progress" role="progressbar" aria-label="Upload progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress}>
-          <div className="progress-bar" style={{ width: `${progress}%` }} />
-        </div>
-      )}
-      <Alert error={error} />
-    </form>
+    <>
+      <label className="visually-hidden" htmlFor={id}>{label}</label>
+      <select id={id} className="input" value={value} onChange={e => onChange(e.target.value)}>
+        {options.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+      </select>
+    </>
   );
 }
 
-function DocumentRow({ doc, writable, docs, onError }) {
+function DocumentRow({ doc, writable, docs, uploader, onError }) {
   const [editing, setEditing] = useState(false);
-  const [name, setName] = useState(doc.filename || '');
-  const [busy, setBusy] = useState(null);
-
-  const run = async (label, fn) => {
-    setBusy(label);
-    onError(null);
-    try { await fn(); } catch (err) { onError(err); } finally { setBusy(null); }
-  };
-
-  const onRename = (e) => {
-    e.preventDefault();
-    const next = name.trim();
-    if (!next || next === doc.filename) return setEditing(false);
-    run('rename', async () => { await docs.rename(doc.id, next); setEditing(false); });
-  };
-
-  const onDelete = () => {
-    if (!window.confirm(`Delete "${doc.original_name || doc.filename}"? This cannot be undone.`)) return;
-    run('delete', () => docs.remove(doc.id));
-  };
-
   const displayName = doc.filename || doc.original_name;
-
   return (
     <tr>
       <td className="cell-name">
         {editing ? (
-          <form onSubmit={onRename} className="inline-form">
-            <label className="visually-hidden" htmlFor={`rename-${doc.id}`}>New name</label>
-            <input id={`rename-${doc.id}`} className="input input-sm" value={name} autoFocus
-              onChange={e => setName(e.target.value)} onKeyDown={e => e.key === 'Escape' && setEditing(false)} />
-            <button type="submit" className="btn btn-primary btn-sm" disabled={busy === 'rename'}>Save</button>
-            <button type="button" className="btn btn-secondary btn-sm" onClick={() => setEditing(false)}>Cancel</button>
-          </form>
-        ) : <span className="truncate" title={displayName}>{displayName}</span>}
+          <RenameForm doc={doc} onRename={docs.rename} onDone={() => setEditing(false)} onError={onError} />
+        ) : (
+          <Link to={`/documents/${doc.id}`} title={displayName}>
+            <Icon name="fileText" className="text-muted" />
+            <span className="truncate">{displayName}</span>
+          </Link>
+        )}
       </td>
-      <td>{fileTypeLabel(doc.mime_type)}</td>
-      <td>{formatBytes(doc.file_size)}</td>
+      <td className="hide-sm">{fileTypeLabel(doc.mime_type)}</td>
+      <td className="hide-sm">{formatBytes(doc.file_size)}</td>
+      <td className="hide-md">{uploader}</td>
+      <td className="hide-md">{formatDateTime(doc.created_at)}</td>
       <td><StatusBadge status={doc.status} /></td>
-      <td>{formatDateTime(doc.created_at)}</td>
-      <td>{formatDateTime(doc.updated_at)}</td>
       <td className="cell-actions">
-        <button type="button" className="btn btn-link btn-sm" disabled={!!busy}
-          onClick={() => run('download', () => downloadDocument(doc))}
-          aria-label={`Download ${displayName}`}>
-          {busy === 'download' ? 'Downloading…' : 'Download'}
-        </button>
-        {writable && !editing && (
-          <button type="button" className="btn btn-link btn-sm" disabled={!!busy}
-            onClick={() => { setName(doc.filename || ''); setEditing(true); }} aria-label={`Rename ${displayName}`}>
-            Rename
-          </button>
-        )}
-        {writable && doc.status === 'failed' && (
-          <button type="button" className="btn btn-link btn-sm" disabled={!!busy}
-            onClick={() => run('reprocess', () => docs.reprocess(doc.id))} aria-label={`Retry processing ${displayName}`}>
-            Retry
-          </button>
-        )}
-        {writable && (
-          <button type="button" className="btn btn-link btn-sm btn-danger-text" disabled={!!busy}
-            onClick={onDelete} aria-label={`Delete ${displayName}`}>
-            {busy === 'delete' ? 'Deleting…' : 'Delete'}
-          </button>
+        {!editing && (
+          <DocumentActions doc={doc} writable={writable} actions={docs} onError={onError}
+            onStartRename={() => setEditing(true)} />
         )}
       </td>
     </tr>
   );
 }
+

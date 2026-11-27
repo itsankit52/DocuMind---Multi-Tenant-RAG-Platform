@@ -30,10 +30,11 @@ describe('Role-aware navigation', () => {
     renderApp('/');
     await screen.findByRole('heading', { name: 'Dashboard' });
     expect(screen.getAllByTestId('role-badge')[0]).toHaveTextContent(label);
-    for (const item of ['Dashboard', 'Documents', 'Conversations']) {
+    for (const item of ['Dashboard', 'Documents', 'Chat', 'Settings']) {
       expect(nav().getByRole('link', { name: item })).toBeInTheDocument();
     }
     expect(nav().queryByRole('link', { name: 'Members' }) !== null).toBe(hasMembers);
+    expect(nav().queryByRole('link', { name: 'Invitations' }) !== null).toBe(hasMembers);
   });
 
   it.each(['member', 'viewer'])('%s opening the Members URL directly gets "Not available" and no API call', async (role) => {
@@ -70,9 +71,9 @@ describe('Role-aware actions', () => {
     expect(await screen.findByRole('button', { name: 'Download policy.pdf' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Rename policy.pdf' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Delete policy.pdf' })).not.toBeInTheDocument();
-    expect(screen.queryByLabelText(/Upload a document/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Upload document' })).not.toBeInTheDocument();
 
-    await userEvent.setup().click(nav().getByRole('link', { name: 'Conversations' }));
+    await userEvent.setup().click(nav().getByRole('link', { name: 'Chat' }));
     await userEvent.setup().click(await screen.findByRole('link', { name: /Leave/ }));
     const box = await screen.findByLabelText('Ask a question');
     await waitFor(() => expect(box).toBeEnabled());
@@ -86,7 +87,7 @@ describe('Role-aware actions', () => {
     documentApi.list.mockResolvedValue({ documents: [doc], pagination: { totalCount: 1 } });
     renderApp('/documents');
     expect(await screen.findByRole('button', { name: 'Rename policy.pdf' })).toBeInTheDocument();
-    expect(screen.getByLabelText(/Upload a document/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Upload document' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Delete policy.pdf' })).toBeInTheDocument();
     expect(nav().queryByRole('link', { name: 'Members' })).not.toBeInTheDocument();
   });
@@ -109,7 +110,7 @@ describe('Members page (admin)', () => {
     organizationApi.listMembers.mockResolvedValue({ members: MEMBERS });
   });
 
-  it('lists members with name, email, role and status', async () => {
+  it('lists members with name, email, role and joined date', async () => {
     renderApp('/settings/members');
     const rows = await screen.findAllByRole('row');
     expect(rows).toHaveLength(4);
@@ -117,7 +118,7 @@ describe('Members page (admin)', () => {
     expect(bob.getByText('Bob')).toBeInTheDocument();
     expect(bob.getByText('bob@example.com')).toBeInTheDocument();
     expect(bob.getByLabelText('Role for bob@example.com')).toHaveValue('member');
-    expect(bob.getByText('active')).toBeInTheDocument();
+    expect(bob.getByText(/2026/)).toBeInTheDocument(); // joined date
     expect(organizationApi.listMembers).toHaveBeenCalledWith(ORG_A.organization_id);
   });
 

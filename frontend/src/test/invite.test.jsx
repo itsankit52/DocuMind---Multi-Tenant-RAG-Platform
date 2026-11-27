@@ -375,6 +375,13 @@ describe('lazy-loaded routes', () => {
     mockSignedIn({ role: 'admin' });
     renderApp('/settings/members');
     expect(await screen.findByRole('heading', { name: 'Members' })).toBeInTheDocument();
+    // "Invite member" opens the invitation dialog on the (lazy) Invitations page
+    expect(screen.getByRole('link', { name: 'Invite member' })).toHaveAttribute('href', '/settings/invitations');
+  });
+
+  it('the lazy Invitations page loads for admins', async () => {
+    mockSignedIn({ role: 'admin' });
+    renderApp('/settings/invitations');
     expect(await screen.findByRole('heading', { name: 'Invitations' })).toBeInTheDocument();
   });
 });

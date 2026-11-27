@@ -65,7 +65,8 @@ describe('Documents page', () => {
     });
     renderApp('/documents');
     const user = userEvent.setup();
-    await user.upload(await screen.findByLabelText(/Upload a document/), pdf());
+    await user.click(await screen.findByRole('button', { name: 'Upload document' }));
+    await user.upload(screen.getByLabelText(/Upload a document/), pdf());
     await user.click(screen.getByRole('button', { name: 'Upload' }));
 
     expect(await screen.findByRole('progressbar', { name: 'Upload progress' })).toHaveAttribute('aria-valuenow', '40');
@@ -84,7 +85,8 @@ describe('Documents page', () => {
     documentApi.upload.mockRejectedValue(toApiError(413, 'File size exceeds maximum limit of 10MB.'));
     renderApp('/documents');
     const user = userEvent.setup();
-    await user.upload(await screen.findByLabelText(/Upload a document/), pdf());
+    await user.click(await screen.findByRole('button', { name: 'Upload document' }));
+    await user.upload(screen.getByLabelText(/Upload a document/), pdf());
     await user.click(screen.getByRole('button', { name: 'Upload' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('File size exceeds maximum limit of 10MB.');
   });
@@ -92,7 +94,8 @@ describe('Documents page', () => {
   it('rejects unsupported file types before uploading (UX check only)', async () => {
     renderApp('/documents');
     const user = userEvent.setup({ applyAccept: false });
-    await user.upload(await screen.findByLabelText(/Upload a document/), new File(['x'], 'notes.txt', { type: 'text/plain' }));
+    await user.click(await screen.findByRole('button', { name: 'Upload document' }));
+    await user.upload(screen.getByLabelText(/Upload a document/), new File(['x'], 'notes.txt', { type: 'text/plain' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Only PDF and DOCX files are supported.');
     expect(screen.getByRole('button', { name: 'Upload' })).toBeDisabled();
     expect(documentApi.upload).not.toHaveBeenCalled();
@@ -137,7 +140,7 @@ describe('Documents page', () => {
     documentApi.list.mockResolvedValue(listOf(doc()));
     renderApp('/documents');
     expect(await screen.findByRole('button', { name: 'Download policy.pdf' })).toBeInTheDocument();
-    expect(screen.queryByLabelText(/Upload a document/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Upload document' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Delete policy.pdf' })).not.toBeInTheDocument();
     expect(screen.getByText(/read-only access/)).toBeInTheDocument();
   });

@@ -16,6 +16,7 @@ import { invitationApi } from '../api/endpoints';
 import { ROLE_LABELS, ROLES } from '../context/AuthContext';
 import { Alert, EmptyState, Spinner } from './Feedback';
 import { Modal } from './Modal';
+import { Icon } from './Icon';
 import { formatDateTime } from '../utils/format';
 import { resolveInvitationLink } from '../invitations/invitationLink';
 
@@ -31,7 +32,7 @@ const STATUS_FILTERS = [
 const STATUS_TONES = { pending: 'pending', accepted: 'success', revoked: 'danger', expired: 'neutral' };
 const STATUS_LABELS = { pending: 'Pending', accepted: 'Accepted', revoked: 'Revoked', expired: 'Expired' };
 
-export function InvitationsPanel({ orgId }) {
+export function InvitationsPanel({ orgId, openCreate = false }) {
   const [filter, setFilter] = useState('');
   const [page, setPage] = useState(1);
   const [list, setList] = useState({ invitations: [], pagination: null });
@@ -39,7 +40,7 @@ export function InvitationsPanel({ orgId }) {
   const [error, setError] = useState(null);
   const [notice, setNotice] = useState(null);
   const [busyId, setBusyId] = useState(null);
-  const [dialog, setDialog] = useState(null); // null | { type: 'create' } | { type: 'share', link, email, role, resent }
+  const [dialog, setDialog] = useState(() => (openCreate ? { type: 'create' } : null)); // null | { type: 'create' } | { type: 'share', link, email, role, resent }
   const requestSeq = useRef(0);
   const active = useRef(true);
 
@@ -118,14 +119,18 @@ export function InvitationsPanel({ orgId }) {
   const totalPages = Math.max(1, pagination?.totalPages || 1);
 
   return (
-    <section className="card invitations" aria-labelledby="invitations-heading">
-      <div className="card-header">
-        <div>
-          <h2 id="invitations-heading">Invitations</h2>
-          <p className="muted small">Invite people by email. You'll get a link to share with them — no email is sent.</p>
+    <section className="invitations" aria-labelledby="invitations-heading">
+      <header className="page-header">
+        <div className="min-w-0">
+          <h1 id="invitations-heading">Invitations</h1>
+          <p>Invite people by email. You’ll get a secure link to share with them — no email is sent.</p>
         </div>
-        <button type="button" className="btn btn-primary" onClick={() => setDialog({ type: 'create' })}>Invite member</button>
-      </div>
+        <div className="page-actions">
+          <button type="button" className="btn btn-primary" onClick={() => setDialog({ type: 'create' })}>
+            <Icon name="mail" /> Send invitation
+          </button>
+        </div>
+      </header>
 
       <div className="invitations-toolbar">
         <label className="field-label" htmlFor="invitation-status-filter">Status</label>
@@ -138,7 +143,7 @@ export function InvitationsPanel({ orgId }) {
       {error && <Alert error={error} onRetry={load} onDismiss={() => setError(null)} />}
 
       {loading && invitations.length === 0 ? <Spinner label="Loading invitations…" /> : invitations.length === 0 ? (
-        <EmptyState title={filter ? `No ${STATUS_LABELS[filter].toLowerCase()} invitations` : 'No invitations yet'} />
+        <div className="card"><EmptyState icon="mail" title={filter ? `No ${STATUS_LABELS[filter].toLowerCase()} invitations` : 'No invitations yet'} /></div>
       ) : (
         <div className="table-wrap" aria-busy={loading}>
           <table className="table">

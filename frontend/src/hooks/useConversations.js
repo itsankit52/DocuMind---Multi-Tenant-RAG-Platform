@@ -17,6 +17,7 @@ export function useConversations(organizationId, { limit = 50 } = {}) {
   const [error, setError] = useState(null);
   const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [totalCount, setTotalCount] = useState(null); // from pagination; null when unknown
   const active = useRef(true);
   const requestSeq = useRef(0);
   const pagesLoaded = useRef(1);
@@ -36,6 +37,7 @@ export function useConversations(organizationId, { limit = 50 } = {}) {
       const list = mergeById([], results.flatMap(r => r?.conversations || []));
       const last = results[results.length - 1];
       setConversations(list);
+      setTotalCount(Number.isFinite(last?.pagination?.totalCount) ? last.pagination.totalCount : null);
       setHasMore(hasMorePages(last?.pagination, {
         page: pages, pageSize: limit, received: last?.conversations?.length || 0, loaded: list.length,
       }));
@@ -115,7 +117,7 @@ export function useConversations(organizationId, { limit = 50 } = {}) {
   }, []);
 
   return {
-    conversations, loading, error, hasMore, loadingMore,
+    conversations, totalCount, loading, error, hasMore, loadingMore,
     reload: load, loadMore, create, rename, remove, touch,
   };
 }

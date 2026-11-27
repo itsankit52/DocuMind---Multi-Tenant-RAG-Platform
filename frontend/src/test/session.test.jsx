@@ -35,7 +35,7 @@ afterEach(() => {
 describe('Session expired notice', () => {
   it('is not shown to a brand-new anonymous visitor (initial /auth/me 401 and failed refresh)', async () => {
     const calls = stubAdapter(() => ({ status: 401 }));
-    renderApp('/');
+    renderApp('/documents'); // "/" shows the public landing page to anonymous visitors
     expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument();
     // The interceptor really did attempt (and fail) a refresh during bootstrap
     expect(calls).toEqual(expect.arrayContaining(['/auth/me', '/auth/refresh']));
