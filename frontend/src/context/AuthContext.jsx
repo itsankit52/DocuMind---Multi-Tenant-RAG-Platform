@@ -30,6 +30,7 @@ export function AuthProvider({ children }) {
   const [activeOrgId, setActiveOrgId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [sessionExpired, setSessionExpired] = useState(false);
+  const [googleSignInEnabled, setGoogleSignInEnabled] = useState(false);
   const mounted = useRef(true);
   // Whether a signed-in user was loaded. "Session expired" is only meaningful for a user who
   // had a session: an anonymous first visit also 401s on /auth/me (and on the refresh attempt).
@@ -57,6 +58,7 @@ export function AuthProvider({ children }) {
       hadUser.current = !!result?.user;
       setUser(result?.user || null);
       setOrganizations(orgs);
+      setGoogleSignInEnabled(result?.googleSignInEnabled === true);
       setSessionExpired(false);
       const preferred = readOrgPreference();
       const current = orgs.find(o => o.organization_id === preferred) || orgs[0] || null;
@@ -141,6 +143,7 @@ export function AuthProvider({ children }) {
     isAuthenticated: !!user,
     loading,
     sessionExpired,
+    googleSignInEnabled,
     login,
     register,
     logout,
@@ -148,7 +151,7 @@ export function AuthProvider({ children }) {
     selectOrganization,
     createOrganization,
     joinOrganization,
-  }), [user, organizations, activeOrganization, loading, sessionExpired,
+  }), [user, organizations, activeOrganization, loading, sessionExpired, googleSignInEnabled,
     login, register, logout, refreshUser, selectOrganization, createOrganization, joinOrganization]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

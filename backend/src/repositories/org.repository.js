@@ -242,7 +242,67 @@ class OrgRepository {
       );
 
       await client.query('COMMIT');
-      return membership;
+      // previousRole: the active role before this call (null = newly added or re-added member)
+      return { membership, previousRole: current ? current.role : null };
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw this.toLockTimeoutError(error) || error;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Remove a member from the organization (soft: status = 'removed', so the row, its history
+   * and audit references stay; invitation acceptance may reactivate it later). Same
+   * per-organization lock and last-admin rule as setMemberRole, so concurrent removals and
+   * demotions can never leave the organization without an active admin. Access ends at once:
+   * every request re-checks an ACTIVE membership (validateMembership). The MEMBER_REMOVE audit
+   * entry is written in the same transaction, as documind_app in the organization's tenant.
+   */
+  async removeMember({ organizationId, actorId, userId }) {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN ISOLATION LEVEL READ COMMITTED');
+      await this.lockOrganizationAsAdmin(client, organizationId, actorId);
+
+      const { rows: [current] } = await client.query(
+        `SELECT role FROM memberships
+         WHERE organization_id = $1 AND user_id = $2 AND status = 'active'
+         FOR UPDATE`,
+        [organizationId, userId]
+      );
+      if (!current) throw new AppError('Member not found in this organization.', 404);
+
+      if (current.role === 'admin') {
+        const { rows: [{ n }] } = await client.query(
+          `SELECT count(*)::int AS n FROM memberships
+           WHERE organization_id = $1 AND role = 'admin' AND status = 'active'`,
+          [organizationId]
+        );
+        if (n <= 1) {
+          throw new AppError('An organization must keep at least one admin. Promote another member to admin first.', 409);
+        }
+      }
+
+      await client.query(
+        `UPDATE memberships SET status = 'removed'
+         WHERE organization_id = $1 AND user_id = $2 AND status = 'active'`,
+        [organizationId, userId]
+      );
+
+      await client.query('SET LOCAL ROLE documind_app');
+      await client.query('SELECT set_config($1, $2, true)', [env.PG_TENANT_SETTING, organizationId]);
+      await auditRepo.log({
+        organizationId,
+        actorId,
+        action: 'MEMBER_REMOVE',
+        resourceId: userId,
+        metadata: { role: current.role, self: actorId === userId },
+      }, client);
+
+      await client.query('COMMIT');
+      return { userId, role: current.role };
     } catch (error) {
       await client.query('ROLLBACK');
       throw this.toLockTimeoutError(error) || error;

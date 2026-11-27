@@ -18,6 +18,12 @@ class UserRepository {
     return rows[0];
   }
 
+  /** The stored password hash, or null (Google-only account / unknown user). Never returned to clients. */
+  async findPasswordHash(id) {
+    const { rows } = await pool.query('SELECT password_hash FROM users WHERE id = $1', [id]);
+    return rows[0] ? rows[0].password_hash : null;
+  }
+
   async create({ email, passwordHash, fullName }) {
     const { rows } = await pool.query(
       'INSERT INTO users (email, password_hash, full_name) VALUES ($1, $2, $3) RETURNING id, email, full_name, status, created_at',

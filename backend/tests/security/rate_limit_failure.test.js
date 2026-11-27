@@ -277,7 +277,7 @@ describe('configuration', () => {
         if (/failClosed\s*:\s*true/.test(m[2])) optIns.push(`${path.basename(f)}:${m[1]}`);
       }
     }
-    expect(limiters).toBe(8);
+    expect(limiters).toBe(9); // 9th: googleRateLimiter (auth/google.controller.js), fail-open like the other auth limiters
     expect(optIns.sort()).toEqual(['invitation.controller.js:acceptRateLimiter', 'invitation.controller.js:previewRateLimiter']);
   });
 });

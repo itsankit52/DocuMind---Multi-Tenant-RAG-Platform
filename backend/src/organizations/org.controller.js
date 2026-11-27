@@ -183,28 +183,46 @@ router.post('/:organizationId/members', orgWriteRateLimiter, requireOrgAdmin, as
     const user = await userRepo.findByEmail(email);
 
     if (!user) {
-      return next(new AppError(`User with email ${email} not found. They must register first.`, 404));
+      // The address is not echoed back: responses and logs never carry it.
+      return next(new AppError('No registered user has that email address. They must register first.', 404));
     }
 
     // This endpoint also changes an existing member's role (upsert). It never demotes the
     // organization's last active admin (409) — checked under a per-organization lock so
     // concurrent demotions cannot race past each other.
-    const membership = await orgRepo.setMemberRole({
+    const { membership, previousRole } = await orgRepo.setMemberRole({
       organizationId,
       actorId: req.user.id,
       userId: user.id,
       role,
     });
 
+    // A new (or re-added) member is MEMBER_ADD; a change of an active member's role is its own event.
+    const roleChange = previousRole !== null;
     await auditRepo.log({
       organizationId,
       actorId: req.user.id,
-      action: 'MEMBER_ADD',
+      action: roleChange ? 'MEMBER_ROLE_CHANGE' : 'MEMBER_ADD',
       resourceId: user.id,
-      metadata: { email, role },
+      metadata: roleChange ? { email, previousRole, role } : { email, role },
     });
 
     res.status(201).json({ status: 'success', data: { membership } });
+  } catch (err) {
+    next(AppError.from(err));
+  }
+});
+
+// Remove a member (Admin only). Soft removal; refuses the last active admin (409).
+// An admin may remove themselves only while another active admin remains.
+router.delete('/:organizationId/members/:userId', orgWriteRateLimiter, requireOrgAdmin, async (req, res, next) => {
+  try {
+    const { organizationId, userId } = req.params;
+    if (!UUID_RE.test(userId)) {
+      return next(new AppError('User ID must be a valid UUID.', 400));
+    }
+    const removed = await orgRepo.removeMember({ organizationId, actorId: req.user.id, userId: userId.toLowerCase() });
+    res.status(200).json({ status: 'success', data: { removed } });
   } catch (err) {
     next(AppError.from(err));
   }

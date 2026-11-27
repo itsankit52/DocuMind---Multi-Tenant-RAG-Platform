@@ -14,6 +14,10 @@ const path = require('path');
 // Captured before dotenv runs: dotenv would silently fill REDIS_URL from .env (development).
 const EXPLICIT_REDIS_URL = process.env.REDIS_URL;
 
+// Suites stub the embedding model per test; a cached question vector would bypass the stub.
+// The cache is off unless a run sets it explicitly (its own suite enables it per test).
+if (process.env.RAG_EMBEDDING_CACHE_TTL_SECONDS === undefined) process.env.RAG_EMBEDDING_CACHE_TTL_SECONDS = '0';
+
 require('dotenv').config({ quiet: true });
 
 const TEST_COMMAND_HINT = 'e.g. DATABASE_URL=.../documind_test REDIS_URL=redis://127.0.0.1:6380/15 npx jest --runInBand';

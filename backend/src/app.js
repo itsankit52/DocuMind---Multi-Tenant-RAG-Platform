@@ -6,6 +6,7 @@ const AppError = require('./utils/AppError');
 const authRoutes = require('./auth/auth.controller');
 const orgRoutes = require('./organizations/org.controller');
 const invitationRoutes = require('./invitations/invitation.controller');
+const googleAuthRoutes = require('./auth/google.controller');
 const documentRoutes = require('./documents/document.controller');
 const ragRoutes = require('./rag/rag.controller');
 const conversationRoutes = require('./conversations/conversation.controller');
@@ -61,6 +62,7 @@ const ragRateLimiter = rateLimiter({
 
 // Routes
 // (tagRoute only records the mount path for low-cardinality metric labels)
+app.use('/api/auth/google', tagRoute, googleAuthRoutes);
 app.use('/api/auth', tagRoute, authRoutes);
 app.use('/api/organizations', tagRoute, authMiddleware, orgRoutes);
 app.use('/api/invitations', tagRoute, authMiddleware, invitationRoutes);

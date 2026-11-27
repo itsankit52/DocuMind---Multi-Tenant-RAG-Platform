@@ -11,6 +11,7 @@ const auditRepo = require('../repositories/audit.repository');
 const { withTenantTransaction } = require('../db/transaction');
 const env = require('../config/env');
 const AppError = require('../utils/AppError');
+const { isDocx } = require('./docx-signature');
 
 function sanitizeFilename(originalName) {
   if (!originalName || typeof originalName !== 'string') {
@@ -62,8 +63,8 @@ function validateFile(file) {
       throw new AppError('Invalid PDF file content.', 400);
     }
   } else if (ext === 'docx') {
-    const isZip = buf.length >= 4 && buf[0] === 0x50 && buf[1] === 0x4B;
-    if (!isZip) {
+    // Must be a ZIP whose directory lists the OOXML parts of a Word document (not just "PK")
+    if (!isDocx(buf)) {
       throw new AppError('Invalid DOCX file content.', 400);
     }
   }

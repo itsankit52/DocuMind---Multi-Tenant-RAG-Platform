@@ -12,7 +12,8 @@
  * - Never drops or recreates the database.
  *
  * Connects with MIGRATION_DATABASE_URL (schema owner) when set, otherwise DATABASE_URL.
- * The runtime role password is applied from DB_RUNTIME_PASSWORD when provided.
+ * Login role passwords are applied when provided: DB_RUNTIME_PASSWORD (documind_runtime),
+ * DB_API_PASSWORD (documind_api, migration 012) and DB_WORKER_PASSWORD (documind_worker, 013).
  */
 require('dotenv').config();
 const fs = require('fs');
@@ -96,6 +97,14 @@ async function runMigrations() {
     if (process.env.DB_RUNTIME_PASSWORD) {
       await setRolePassword(client, 'documind_runtime', process.env.DB_RUNTIME_PASSWORD);
       log('Runtime role password applied', { role: 'documind_runtime' });
+    }
+    // Least-privilege logins (NOBYPASSRLS). Created by 012/013 with no password (unusable)
+    // until one is applied here.
+    for (const [role, variable] of [['documind_api', 'DB_API_PASSWORD'], ['documind_worker', 'DB_WORKER_PASSWORD']]) {
+      if (process.env[variable]) {
+        await setRolePassword(client, role, process.env[variable]);
+        log('Login role password applied', { role });
+      }
     }
     if (process.env.NODE_ENV === 'production') {
       // documind_app is only a SET ROLE target; its development password must not grant logins.

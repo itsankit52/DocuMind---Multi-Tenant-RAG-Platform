@@ -24,6 +24,7 @@ export function resetApiMocks() {
   for (const api of [authApi, organizationApi, documentApi, conversationApi, invitationApi]) {
     for (const fn of Object.values(api)) fn.mockReset();
   }
+  authApi.googleSignInUrl.mockReturnValue('/api/auth/google');
   vi.restoreAllMocks();
 }
 

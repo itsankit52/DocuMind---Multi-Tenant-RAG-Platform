@@ -8,6 +8,7 @@
 
 const env = require('../config/env');
 const embeddingService = require('../embeddings/embedding.service');
+const embeddingCache = require('./query-embedding-cache');
 const qdrantService = require('../vector/qdrant.service');
 const chunkRepo = require('../repositories/chunk.repository');
 const { withTenantTransaction } = require('../db/transaction');
@@ -54,7 +55,11 @@ class RetrievalService {
     // Stage 1: Generate query embedding
     let queryVector;
     try {
-      queryVector = await embeddingService.embedText(validatedQuestion);
+      // Cached per organization in Redis (fail-open); retrieval below always runs live
+      queryVector = await embeddingCache.getOrCompute(
+        { organizationId, model: embeddingService.model, question: validatedQuestion },
+        () => embeddingService.embedText(validatedQuestion),
+      );
     } catch (embErr) {
       throw new AppError(`Failed to generate query embedding: ${embErr.message}`, 503);
     }

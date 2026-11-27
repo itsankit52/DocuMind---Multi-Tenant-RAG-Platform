@@ -1,6 +1,7 @@
 require('dotenv').config();
 const zod = require('zod');
 const { parseAppBaseUrl } = require('./app-base-url');
+const { checkGoogleOAuthConfig } = require('./google-oauth-config');
 
 const envSchema = zod.object({
   PORT: zod.string().transform(Number).prefault('3000'),
@@ -21,6 +22,11 @@ const envSchema = zod.object({
   // Optional: when unset or empty, invitation APIs return the token only and no URL. Never
   // derived from request headers (Host-header injection). Rules: ./app-base-url.js
   APP_BASE_URL: zod.string().optional(),
+  // Google sign-in (OAuth 2.0 / OpenID Connect, authorization-code flow + PKCE). Optional as a
+  // group: all unset → disabled. Rules: ./google-oauth-config.js. Server-side only (never VITE_).
+  GOOGLE_CLIENT_ID: zod.string().optional(),
+  GOOGLE_CLIENT_SECRET: zod.string().optional(),
+  GOOGLE_CALLBACK_URL: zod.string().optional(),
   PG_TENANT_SETTING: zod.string().default('app.current_tenant'),
   MINIO_ENDPOINT: zod.string().default('localhost'),
   MINIO_PORT: zod.string().transform(Number).prefault('9000'),
@@ -58,6 +64,8 @@ const envSchema = zod.object({
   RAG_SCORE_THRESHOLD: zod.string().transform(Number).prefault('0.0'),
   RAG_MAX_CONTEXT_CHARS: zod.string().transform(Number).prefault('15000'),
   RAG_MAX_QUESTION_LENGTH: zod.string().transform(Number).prefault('1000'),
+  // Redis cache for question embeddings (seconds); 0 disables it
+  RAG_EMBEDDING_CACHE_TTL_SECONDS: zod.string().transform(Number).prefault('3600'),
   // Conversation / Chat Configuration
   MAX_CONVERSATION_MESSAGES: zod.string().transform(Number).prefault('10'),
   MAX_CONVERSATION_CONTEXT_CHARS: zod.string().transform(Number).prefault('4000'),
@@ -112,6 +120,9 @@ const productionSchema = envSchema.superRefine((data, ctx) => {
   if (appBaseUrl.error) {
     ctx.addIssue({ code: 'custom', path: ['APP_BASE_URL'], message: appBaseUrl.error });
   }
+  for (const issue of checkGoogleOAuthConfig({ ...data, APP_BASE_URL: appBaseUrl.value }).issues) {
+    ctx.addIssue({ code: 'custom', path: [issue.path], message: issue.message });
+  }
   if (data.NODE_ENV !== 'production') return;
   const origins = data.CORS_ORIGIN.split(',').map(o => o.trim());
   if (origins.some(o => o === '*' || o === '')) {
@@ -137,6 +148,8 @@ if (!parsed.success) {
 
 // Normalized origin (or undefined when unset/empty); validated above.
 parsed.data.APP_BASE_URL = parseAppBaseUrl(parsed.data.APP_BASE_URL, parsed.data.NODE_ENV).value;
+// true only when all Google settings (and APP_BASE_URL) are present and valid
+parsed.data.GOOGLE_OAUTH_ENABLED = checkGoogleOAuthConfig(parsed.data).enabled;
 
 module.exports = parsed.data;
 

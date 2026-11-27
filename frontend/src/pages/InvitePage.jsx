@@ -26,7 +26,9 @@ const RETURN_STATE = { from: '/invite' }; // a path only — never the token
 // The backend's 404 is deliberately identical for every invalid case (including a different
 // account), so this wording is neutral: it never claims the current account is the cause.
 export const UNAVAILABLE_TEXT = 'This invitation is unavailable. It may be invalid, expired, revoked, or no longer active.';
-export const TRY_ANOTHER_ACCOUNT_TEXT = 'If you believe you received a valid invitation, you can sign out and sign in with the account that received it.';
+// Invitations open only for the account whose email received them; this wording covers the
+// common case of an invitee without an account yet, and still reveals nothing about the token.
+export const TRY_ANOTHER_ACCOUNT_TEXT = 'An invitation opens only for the email address it was sent to. Sign out, then sign in, or create an account, with that email address.';
 
 export function InvitePage() {
   const { loading, isAuthenticated, user, organizations, logout, joinOrganization } = useAuth();

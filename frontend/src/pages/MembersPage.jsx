@@ -4,7 +4,8 @@
  * Uses the existing endpoints:
  *   GET  /api/organizations/:id/members          list active members
  *   POST /api/organizations/:id/members          add a registered user by email, or change a role
- * The backend refuses to demote the last admin (409); the UI also prevents it up front.
+ *   DELETE /api/organizations/:id/members/:userId remove a member
+ * The backend refuses to demote or remove the last admin (409); the UI also prevents it up front.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -74,6 +75,34 @@ export function MembersPage() {
     }
   };
 
+  /** Remove a member after confirmation; removing yourself refreshes the session. */
+  const removeMember = async (member) => {
+    const isSelf = member.id === user?.id;
+    const who = member.full_name || member.email;
+    const question = isSelf
+      ? 'Remove yourself from this organization? You will lose access immediately.'
+      : `Remove ${who} from this organization? They will lose access immediately.`;
+    if (!window.confirm(question)) return;
+
+    setSavingId(member.id);
+    setNotice(null);
+    setError(null);
+    try {
+      await organizationApi.removeMember(orgId, member.id);
+      if (isSelf) {
+        await refreshUser();
+        return;
+      }
+      await load();
+      setNotice(`${who} was removed from the organization.`);
+    } catch (err) {
+      setError(err);
+      await load();
+    } finally {
+      if (active.current) setSavingId(null);
+    }
+  };
+
   return (
     <div className="page">
       <header className="page-header">
@@ -103,6 +132,7 @@ export function MembersPage() {
                 <th scope="col">Role</th>
                 <th scope="col">Status</th>
                 <th scope="col">Member since</th>
+                <th scope="col"><span className="visually-hidden">Actions</span></th>
               </tr>
             </thead>
             <tbody>
@@ -126,6 +156,14 @@ export function MembersPage() {
                     </td>
                     <td><span className={`badge ${m.status === 'active' ? 'badge-success' : 'badge-neutral'}`}>{m.status}</span></td>
                     <td>{formatDateTime(m.created_at)}</td>
+                    <td>
+                      <button type="button" className="btn btn-sm btn-danger-text"
+                        disabled={savingId === m.id || lastAdmin}
+                        title={lastAdmin ? 'The last admin cannot be removed' : undefined}
+                        aria-label={`Remove ${m.email}`} onClick={() => removeMember(m)}>
+                        Remove
+                      </button>
+                    </td>
                   </tr>
                 );
               })}
@@ -137,7 +175,7 @@ export function MembersPage() {
       <section className="card role-help" aria-label="What each role can do">
         <h2>Roles</h2>
         <ul>
-          <li><strong>Admin</strong> — everything a member can do, plus managing members and roles.</li>
+          <li><strong>Admin</strong> — everything a member can do, plus managing members, roles and invitations.</li>
           <li><strong>Member</strong> — upload, rename and delete documents; ask questions; manage conversations.</li>
           <li><strong>Viewer</strong> — read and download documents and ask questions. No changes.</li>
         </ul>

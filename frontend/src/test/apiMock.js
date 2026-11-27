@@ -1,8 +1,8 @@
 /** vi.fn() stand-ins for every endpoint wrapper (used via vi.mock('../api/endpoints')). */
 import { vi } from 'vitest';
 
-export const authApi = { register: vi.fn(), login: vi.fn(), logout: vi.fn(), me: vi.fn() };
-export const organizationApi = { create: vi.fn(), select: vi.fn(), listMembers: vi.fn(), saveMember: vi.fn() };
+export const authApi = { register: vi.fn(), login: vi.fn(), logout: vi.fn(), me: vi.fn(), linkGoogle: vi.fn(), googleSignInUrl: vi.fn(() => '/api/auth/google') };
+export const organizationApi = { create: vi.fn(), select: vi.fn(), listMembers: vi.fn(), saveMember: vi.fn(), removeMember: vi.fn() };
 export const documentApi = {
   list: vi.fn(), get: vi.fn(), processing: vi.fn(), upload: vi.fn(),
   download: vi.fn(), rename: vi.fn(), remove: vi.fn(), reprocess: vi.fn(),

@@ -3,6 +3,21 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { Alert } from '../components/Feedback';
 import { setPendingInvitationFromLink } from '../invitations/invitationToken';
+import { AuthDivider, GoogleSignInButton } from '../components/GoogleSignIn';
+
+// The invitation token is kept only in page memory, so a full-page Google redirect drops it.
+const GOOGLE_INVITE_NOTE = 'If you continue with Google, open your invitation link again after signing in.';
+
+/** "Continue with Google" + "or" divider, shown above the email/password form. */
+function GoogleOption({ forInvite }) {
+  return (
+    <>
+      <GoogleSignInButton />
+      {forInvite && <p className="muted small google-invite-note">{GOOGLE_INVITE_NOTE}</p>}
+      <AuthDivider />
+    </>
+  );
+}
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -57,6 +72,7 @@ export function LoginPage() {
     <AuthCard title="Sign in">
       {returnPath(location) === '/invite' && <Alert tone="info" message="Sign in to continue with your invitation." />}
       {sessionExpired && !error && <Alert tone="info" message="Your session has expired. Please sign in again." />}
+      <GoogleOption forInvite={returnPath(location) === '/invite'} />
       <form onSubmit={onSubmit} noValidate className="form">
         <label className="field-label" htmlFor="login-email">Email</label>
         <input id="login-email" className="input" type="email" autoComplete="email"
@@ -107,6 +123,7 @@ export function RegisterPage() {
       {returnPath(location) === '/invite' && (
         <Alert tone="info" message="Use the email address that received the invitation. You'll return to it after creating your account." />
       )}
+      <GoogleOption forInvite={returnPath(location) === '/invite'} />
       <form onSubmit={onSubmit} noValidate className="form">
         <label className="field-label" htmlFor="reg-name">Full name</label>
         <input id="reg-name" className="input" autoComplete="name" value={form.fullName} onChange={set('fullName')} />

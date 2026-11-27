@@ -54,6 +54,7 @@ const m = {
 
   // ── Redis ───────────────────────────────────────────────────────────────
   redisErrors: counter('redis_errors_total', 'Redis errors by operation', ['operation']),
+  ragEmbeddingCache: counter('rag_query_embedding_cache_total', 'Question embedding cache lookups by result', ['result']),
 
   // ── RabbitMQ ────────────────────────────────────────────────────────────
   queuePublished: counter('queue_messages_published_total', 'Messages published by queue', ['queue', 'status']),

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { canManageMembers, ROLE_LABELS, useAuth } from '../context/AuthContext';
 import { Alert } from './Feedback';
 
@@ -91,7 +91,7 @@ export function Layout() {
           <NavLink to="/onboarding" className="small">+ New organization</NavLink>
           {switchError && <Alert error={switchError} onDismiss={() => setSwitchError(null)} />}
           <div className="user-box">
-            <span className="user-name" title={user?.email}>{user?.fullName || user?.email}</span>
+            <Link className="user-name" to="/settings/account" title={`Account settings (${user?.email || ''})`}>{user?.fullName || user?.email}</Link>
             <button type="button" className="btn btn-secondary btn-sm" onClick={onLogout} disabled={loggingOut}>
               {loggingOut ? 'Signing out…' : 'Sign out'}
             </button>
